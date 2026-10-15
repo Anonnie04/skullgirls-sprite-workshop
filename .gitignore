@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+/build/
+/release/
+/dist/
+*.exe
+*.zip
+/Test Runs/
+/*-tests.json
+.skullgirls-cache/
+Input/
+Output/
+Prepared/
+Backups/
+Matches/
+*.gfs
+*.art
+*.art-pt
+*.foit
+*.dds
+.DS_Store
+Thumbs.db
+Sequence Imports/
