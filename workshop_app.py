@@ -66,7 +66,7 @@ class App(tk.Tk):
   self.events=queue.Queue();self.cancel_event=threading.Event();self.busy=False;self.prepared=None;self.plan=None;self.last_output=None;self.last_backup=None;self.photos=[];self.fields=[]
   configure_theme(self)
   self.columnconfigure(0,weight=1);self.rowconfigure(2,weight=1)
-  top=workshop_header(self);top.grid(row=0,column=0,sticky='ew',padx=24,pady=(18,10))
+  top=workshop_header(self);top.grid(row=0,column=0,sticky='ew',padx=24,pady=(10,10))
   candidates=[]
   if os.name=='nt':
    import winreg
@@ -95,7 +95,7 @@ class App(tk.Tk):
   tableframe=tk.Frame(imports,bg=BG);tableframe.grid(row=3,column=0,columnspan=3,sticky='nsew');tableframe.columnconfigure(0,weight=1);tableframe.rowconfigure(0,weight=1);self.table=ttk.Treeview(tableframe,columns=('path','result'),show='headings',height=4);self.table.heading('path',text='Input file');self.table.heading('result',text='Result');self.table.column('path',width=500);self.table.column('result',width=360);self.table.grid(row=0,column=0,sticky='nsew');scroll=ttk.Scrollbar(tableframe,orient='vertical',command=self.table.yview);scroll.grid(row=0,column=1,sticky='ns');self.table.configure(yscrollcommand=scroll.set);self.table.bind('<<TreeviewSelect>>',self.preview_selection);self.table.bind('<Double-1>',self.open_preview)
   previews=tk.Frame(imports,bg=BG);previews.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(10,4));self.preview_labels=[]
   for col,title in enumerate(['Current game frame','Prepared replacement']):
-   previews.columnconfigure(col,weight=1);tk.Label(previews,text=title,bg=BG,fg=MUTED).grid(row=0,column=col,sticky='w');label=tk.Label(previews,bg=PANEL,width=40,height=8);label.grid(row=1,column=col,sticky='ew',padx=5);self.preview_labels.append(label)
+   previews.columnconfigure(col,weight=1);tk.Label(previews,text=title,bg=BG,fg=MUTED).grid(row=0,column=col,sticky='w');label=tk.Label(previews,bg=PANEL,width=40,height=6);label.grid(row=1,column=col,sticky='ew',padx=5);self.preview_labels.append(label)
   self.details=tk.StringVar(value='Preparation checks fitting and compression without modifying game files.');tk.Label(imports,textvariable=self.details,bg=BG,fg=MUTED,wraplength=920,justify='left').grid(row=5,column=0,columnspan=3,sticky='ew',pady=7)
   restore=tk.Frame(imports,bg=BG);restore.grid(row=6,column=0,columnspan=3,sticky='ew');self.restore_button=ttk.Button(restore,text='Restore an import backup…',command=self.start_restore);self.restore_button.pack(side='left');ttk.Button(restore,text='Open Input',command=lambda:self.open_branch('Input')).pack(side='right');ttk.Button(restore,text='Open Output',command=lambda:self.open_branch('Output')).pack(side='right',padx=8)
   matching=tk.Frame(self.tabs,bg=BG,padx=12,pady=12);matching.columnconfigure(1,weight=1);matching.rowconfigure(4,weight=1);self.tabs.add(matching,text='Sort between projects')
@@ -105,7 +105,7 @@ class App(tk.Tk):
   match_actions=tk.Frame(matching,bg=BG);match_actions.grid(row=3,column=0,columnspan=3,sticky='ew',pady=8)
   self.match_button=ttk.Button(match_actions,text='Match frames',command=self.start_match);self.match_button.pack(side='left')
   self.copy_button=ttk.Button(match_actions,text='Copy ready PNGs to target Input',style='Accent.TButton',command=self.start_copy,state='disabled');self.copy_button.pack(side='right')
-  self.match_table=ttk.Treeview(matching,columns=('old','new','result'),show='headings',height=8)
+  self.match_table=ttk.Treeview(matching,columns=('old','new','result'),show='headings',height=7)
   for column,title,width in [('old','Source frame',160),('new','Target frame',420),('result','Result',280)]:self.match_table.heading(column,text=title);self.match_table.column(column,width=width)
   self.match_table.grid(row=4,column=0,columnspan=3,sticky='nsew');match_scroll=ttk.Scrollbar(matching,orient='vertical',command=self.match_table.yview);match_scroll.grid(row=4,column=3,sticky='ns');self.match_table.configure(yscrollcommand=match_scroll.set)
   ttk.Button(matching,text='Open matching report',command=lambda:os.startfile(str(self.match_folder)) if self.match_folder else None).grid(row=5,column=0,sticky='w',pady=10)
@@ -119,7 +119,7 @@ class App(tk.Tk):
    if sources:self.match_source.set(str(sources[-1]))
    if targets:self.match_target.set(str(targets[-1]))
   except (OSError,ValueError):pass
-  bottom=tk.Frame(self,bg=BG);bottom.grid(row=3,column=0,sticky='ew',padx=24,pady=(12,18));bottom.columnconfigure(0,weight=1);self.status=tk.StringVar(value='Ready. Create a project or choose an existing project.');self.count=tk.StringVar();tk.Label(bottom,textvariable=self.status,bg=BG,fg=TEXT,anchor='w',wraplength=1000).grid(row=0,column=0,columnspan=3,sticky='ew');self.progress=ttk.Progressbar(bottom,maximum=100);self.progress.grid(row=1,column=0,columnspan=3,sticky='ew',pady=7);tk.Label(bottom,textvariable=self.count,bg=BG,fg=MUTED,anchor='w').grid(row=2,column=0,sticky='w');self.open_button=ttk.Button(bottom,text='Open project',command=self.open_output,state='disabled');self.open_button.grid(row=2,column=1,padx=8);self.stop_button=ttk.Button(bottom,text='Cancel',command=self.stop,state='disabled');self.stop_button.grid(row=2,column=2)
+  bottom=tk.Frame(self,bg=BG);bottom.grid(row=3,column=0,sticky='ew',padx=24,pady=(8,14));bottom.columnconfigure(0,weight=1);self.status=tk.StringVar(value='Ready. Create a project or choose an existing project.');self.count=tk.StringVar();tk.Label(bottom,textvariable=self.status,bg=BG,fg=TEXT,anchor='w',wraplength=1000).grid(row=0,column=0,columnspan=3,sticky='ew');self.progress=ttk.Progressbar(bottom,maximum=100);self.progress.grid(row=1,column=0,columnspan=3,sticky='ew',pady=7);tk.Label(bottom,textvariable=self.count,bg=BG,fg=MUTED,anchor='w').grid(row=2,column=0,sticky='w');self.open_button=ttk.Button(bottom,text='Open project',command=self.open_output,state='disabled');self.open_button.grid(row=2,column=1,padx=8);self.stop_button=ttk.Button(bottom,text='Cancel',command=self.stop,state='disabled');self.stop_button.grid(row=2,column=2)
   self.controls=[self.sequence_button,self.match_button,self.tree_button,self.export_button,self.scan_button,self.prepare_button,self.restore_button]+self.fields;self.game.trace_add('write',self.invalidate);self.project.trace_add('write',self.invalidate);self.protocol('WM_DELETE_WINDOW',self.close);self.poll_after=self.after(100,self.poll)
 
  def invalidate_match(self,*args):
