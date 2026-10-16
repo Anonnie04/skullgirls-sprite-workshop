@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5 — 2026-10-16
+
+- Give the workshop an original Skullgirls-inspired art-deco theme with burgundy panels, gold accents, cream text, and coordinated tabs, tables, dialogs, and keyboard-focus states.
+
+- Smooth the decorative diamond edges with antialiasing.
+
 ## 0.2.4 — 2026-10-15
 
 - Resume interrupted restores safely using verified, atomic archive replacement.

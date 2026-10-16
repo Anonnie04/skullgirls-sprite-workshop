@@ -9,19 +9,64 @@ from decoder import NAMES,available_characters
 from project_match import match_projects,copy_matches
 from workshop import generate_input_tree,export_project,scan_input,prepare_import,apply_import,restore_import,project_info
 
-BG='#11151c';PANEL='#1b222d';TEXT='#edf0f5';MUTED='#a1adbd';ACCENT='#ff9978'
+# Original art-deco styling: no game artwork or external fonts required.
+BG='#181416';PANEL='#292124';TEXT='#f5ead5';MUTED='#c2b39e';ACCENT='#e6bc68'
+BURGUNDY='#542733';BORDER='#806345';HOVER='#403038';DISABLED='#8f827b'
+
+def configure_theme(root):
+ style=ttk.Style(root);style.theme_use('clam')
+ root.option_add('*Font',('Segoe UI',10))
+ root.option_add('*Listbox.background',PANEL);root.option_add('*Listbox.foreground',TEXT)
+ root.option_add('*Listbox.selectBackground',BURGUNDY);root.option_add('*Listbox.selectForeground',TEXT)
+ style.configure('.',background=BG,foreground=TEXT,font=('Segoe UI',10),bordercolor=BORDER,lightcolor=BORDER,darkcolor=BG,focuscolor=ACCENT)
+ for name in ('TEntry','TCombobox'):
+  style.configure(name,fieldbackground=PANEL,foreground=TEXT,insertcolor=TEXT,padding=7,arrowcolor=ACCENT)
+  style.map(name,fieldbackground=[('disabled',BG),('readonly',PANEL)],foreground=[('disabled',DISABLED),('readonly',TEXT)],bordercolor=[('focus',ACCENT)])
+ style.configure('TButton',background=PANEL,foreground=TEXT,padding=(12,8),borderwidth=1)
+ style.map('TButton',background=[('disabled',BG),('pressed',BURGUNDY),('active',HOVER)],foreground=[('disabled',DISABLED)],bordercolor=[('focus',ACCENT),('active',ACCENT)])
+ style.configure('Accent.TButton',background=ACCENT,foreground=BG,font=('Segoe UI',11,'bold'))
+ style.map('Accent.TButton',background=[('disabled',PANEL),('pressed','#c79b4e'),('active','#f6d897')],foreground=[('disabled',DISABLED),('!disabled',BG)])
+ style.configure('TCheckbutton',background=PANEL,foreground=TEXT,padding=4,indicatorbackground=BG,indicatorforeground=BG)
+ style.map('TCheckbutton',background=[('active',HOVER)],foreground=[('disabled',DISABLED)],indicatorbackground=[('disabled',PANEL),('selected',ACCENT)],bordercolor=[('focus',ACCENT)])
+ style.configure('TProgressbar',troughcolor=PANEL,background=ACCENT,bordercolor=BORDER,lightcolor=ACCENT,darkcolor=ACCENT)
+ style.configure('TNotebook',background=BG,borderwidth=1,tabmargins=(0,0,0,0))
+ style.configure('TNotebook.Tab',background=PANEL,foreground=MUTED,padding=(20,10),font=('Segoe UI',10,'bold'))
+ style.map('TNotebook.Tab',background=[('selected',BURGUNDY),('active',HOVER)],foreground=[('selected',ACCENT),('active',TEXT)])
+ style.configure('Treeview',background=PANEL,fieldbackground=PANEL,foreground=TEXT,rowheight=28)
+ style.map('Treeview',background=[('selected',BURGUNDY)],foreground=[('selected',TEXT)])
+ style.configure('Treeview.Heading',background=BURGUNDY,foreground=ACCENT,font=('Segoe UI',10,'bold'),padding=(8,6))
+ style.map('Treeview.Heading',background=[('active',HOVER)])
+ style.configure('TScrollbar',background=PANEL,troughcolor=BG,arrowcolor=ACCENT)
+ style.map('TScrollbar',background=[('active',HOVER),('pressed',BURGUNDY)])
+
+def workshop_header(parent):
+ banner=tk.Canvas(parent,height=100,bg=BG,highlightthickness=0)
+ # Supersample the straight diamond edges; Tk canvas polygons are not antialiased.
+ scale=4
+ diamond=Image.new('RGB',(24*scale,34*scale),BURGUNDY)
+ ImageDraw.Draw(diamond).polygon([(12*scale,3*scale),(21*scale,17*scale),(12*scale,31*scale),(3*scale,17*scale)],fill=ACCENT)
+ banner.diamond=ImageTk.PhotoImage(diamond.resize((24,34),Image.Resampling.LANCZOS),master=banner)
+ def draw(event):
+  banner.delete('all');w=event.width
+  banner.create_polygon(0,0,w,0,w,76,w-24,100,24,100,0,76,fill=BURGUNDY,outline=BORDER)
+  banner.create_line(14,12,w-14,12,fill=ACCENT)
+  banner.create_line(28,88,w-28,88,fill=BORDER)
+  for x in (32,w-32):
+   banner.create_image(x,50,image=banner.diamond)
+   banner.create_line(x,20,x,31,fill=ACCENT);banner.create_line(x,69,x,80,fill=ACCENT)
+  banner.create_text(w/2,30,text='S K U L L G I R L S',fill=ACCENT,font=('Georgia',12,'bold'))
+  banner.create_text(w/2,58,text='SPRITE WORKSHOP',fill=TEXT,font=('Georgia',25,'bold'))
+  banner.create_text(w/2,80,text='E X P O R T   /   E D I T   /   I M P O R T',fill=MUTED,font=('Segoe UI',8))
+ banner.bind('<Configure>',draw)
+ return banner
 
 class App(tk.Tk):
  def __init__(self):
   super().__init__();self.title(f'Skullgirls Sprite Workshop {__version__}');self.geometry('1050x900');self.minsize(930,880);self.configure(bg=BG)
   self.events=queue.Queue();self.cancel_event=threading.Event();self.busy=False;self.prepared=None;self.plan=None;self.last_output=None;self.last_backup=None;self.photos=[];self.fields=[]
-  style=ttk.Style(self);style.theme_use('clam');style.configure('.',background=BG,foreground=TEXT,font=('Segoe UI',10))
-  style.configure('TEntry',fieldbackground=PANEL,foreground=TEXT,insertcolor=TEXT,padding=7);style.configure('TButton',background=PANEL,foreground=TEXT,padding=(12,8));style.map('TButton',background=[('active','#303b4c')],foreground=[('disabled','#687386')])
-  style.configure('Accent.TButton',background=ACCENT,foreground=BG,font=('Segoe UI',11,'bold'));style.map('Accent.TButton',background=[('active','#ffb59c'),('disabled','#53505a')])
-  style.configure('TCheckbutton',background=PANEL,foreground=TEXT,padding=4);style.map('TCheckbutton',background=[('active',PANEL)])
-  style.configure('TProgressbar',troughcolor=PANEL,background=ACCENT);style.configure('TNotebook.Tab',padding=(20,10));style.configure('Treeview',background=PANEL,fieldbackground=PANEL,foreground=TEXT,rowheight=25);style.map('Treeview',background=[('selected','#344156')])
+  configure_theme(self)
   self.columnconfigure(0,weight=1);self.rowconfigure(2,weight=1)
-  top=tk.Frame(self,bg=BG);top.grid(row=0,column=0,sticky='ew',padx=24,pady=(18,10));tk.Label(top,text='SKULLGIRLS / SPRITE WORKSHOP',bg=BG,fg=ACCENT,font=('Segoe UI',10,'bold')).pack(anchor='w');tk.Label(top,text='Export, edit, import',bg=BG,fg=TEXT,font=('Segoe UI',24,'bold')).pack(anchor='w')
+  top=workshop_header(self);top.grid(row=0,column=0,sticky='ew',padx=24,pady=(18,10))
   candidates=[]
   if os.name=='nt':
    import winreg
@@ -37,7 +82,7 @@ class App(tk.Tk):
   tk.Label(export,text='Both use: character / character / data / category / animation / frames',bg=BG,fg=MUTED,anchor='w').grid(row=2,column=0,columnspan=3,sticky='ew',pady=(0,12))
   tools=tk.Frame(export,bg=BG);tools.grid(row=3,column=0,columnspan=3,sticky='ew');tk.Label(tools,text='CHARACTERS',bg=BG,fg=MUTED).pack(side='left')
   ttk.Button(tools,text='Scan game',command=self.scan).pack(side='right',padx=4);ttk.Button(tools,text='Clear',command=lambda:self.select(False)).pack(side='right',padx=4);ttk.Button(tools,text='Select all',command=lambda:self.select(True)).pack(side='right',padx=4)
-  selection=tk.Frame(export,bg=PANEL,padx=12,pady=8);selection.grid(row=4,column=0,columnspan=3,sticky='ew',pady=10);self.vars={};self.checks={}
+  selection=tk.Frame(export,bg=PANEL,padx=12,pady=8,highlightbackground=BORDER,highlightthickness=1);selection.grid(row=4,column=0,columnspan=3,sticky='ew',pady=10);self.vars={};self.checks={}
   for i,(name,label) in enumerate(NAMES.items()):
    self.vars[name]=tk.BooleanVar(value=True);check=ttk.Checkbutton(selection,text=label,variable=self.vars[name]);check.grid(row=i//3,column=i%3,sticky='w',padx=8);self.checks[name]=check
   for i in range(3):selection.columnconfigure(i,weight=1)
