@@ -92,7 +92,7 @@ class App(tk.Tk):
   imports.columnconfigure(1,weight=1);imports.rowconfigure(3,weight=1);self.path_row(imports,0,'PROJECT FOLDER',self.project)
   tk.Label(imports,text='Place only edited PNGs in Input, using the same paths as Output. Empty folders are skipped.\nPrepare and review the previews before applying. The game must be closed when applying or restoring.',bg=BG,fg=MUTED,justify='left',wraplength=920).grid(row=1,column=0,columnspan=3,sticky='ew',pady=10)
   actions=tk.Frame(imports,bg=BG);actions.grid(row=2,column=0,columnspan=3,sticky='ew',pady=(0,8));self.sequence_button=ttk.Button(actions,text='Import animation sequence…',command=self.start_sequence);self.sequence_button.pack(side='left',padx=(0,8));self.scan_button=ttk.Button(actions,text='Check Input',command=self.check_input);self.scan_button.pack(side='left');self.prepare_button=ttk.Button(actions,text='Prepare previews',command=self.start_prepare);self.prepare_button.pack(side='left',padx=8);self.apply_button=ttk.Button(actions,text='Apply ready replacements',style='Accent.TButton',command=self.start_apply,state='disabled');self.apply_button.pack(side='right')
-  tableframe=tk.Frame(imports,bg=BG);tableframe.grid(row=3,column=0,columnspan=3,sticky='nsew');tableframe.columnconfigure(0,weight=1);tableframe.rowconfigure(0,weight=1);self.table=ttk.Treeview(tableframe,columns=('path','result'),show='headings',height=4);self.table.heading('path',text='Input file');self.table.heading('result',text='Result');self.table.column('path',width=500);self.table.column('result',width=360);self.table.grid(row=0,column=0,sticky='nsew');scroll=ttk.Scrollbar(tableframe,orient='vertical',command=self.table.yview);scroll.grid(row=0,column=1,sticky='ns');self.table.configure(yscrollcommand=scroll.set);self.table.bind('<<TreeviewSelect>>',self.preview_selection);self.table.bind('<Double-1>',self.open_preview)
+  tableframe=tk.Frame(imports,bg=BG);tableframe.grid(row=3,column=0,columnspan=3,sticky='nsew');tableframe.columnconfigure(0,weight=1);tableframe.rowconfigure(0,weight=1);self.table=ttk.Treeview(tableframe,columns=('path','result'),show='headings',height=3);self.table.heading('path',text='Input file');self.table.heading('result',text='Result');self.table.column('path',width=500);self.table.column('result',width=360);self.table.grid(row=0,column=0,sticky='nsew');scroll=ttk.Scrollbar(tableframe,orient='vertical',command=self.table.yview);scroll.grid(row=0,column=1,sticky='ns');self.table.configure(yscrollcommand=scroll.set);self.table.bind('<<TreeviewSelect>>',self.preview_selection);self.table.bind('<Double-1>',self.open_preview)
   previews=tk.Frame(imports,bg=BG);previews.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(10,4));self.preview_labels=[]
   for col,title in enumerate(['Current game frame','Prepared replacement']):
    previews.columnconfigure(col,weight=1);tk.Label(previews,text=title,bg=BG,fg=MUTED).grid(row=0,column=col,sticky='w');label=tk.Label(previews,bg=PANEL,width=40,height=6);label.grid(row=1,column=col,sticky='ew',padx=5);self.preview_labels.append(label)
@@ -215,16 +215,16 @@ class App(tk.Tk):
    key=selection[0]
    if key.startswith('error'):r=self.plan['errors'][int(key[5:])];self.details.set(r['path']+' — '+r['error'])
    elif key.startswith('skip'):r=self.plan['skipped'][int(key[4:])];self.details.set(r['path']+' — '+r['reason'])
-   for label in self.preview_labels:label.configure(image='',width=40,height=8)
+   for label in self.preview_labels:label.configure(image='',width=40,height=6)
    self.photos=[];return
   r=self.plan['patches'][int(selection[0][5:])];self.photos=[]
   for label,name in zip(self.preview_labels,[r['before'],r['after']]):
    with Image.open(self.prepared/name) as image:im=image.convert('RGBA')
-   im.thumbnail((430,145),Image.Resampling.NEAREST);canvas=Image.new('RGBA',(440,150),(35,42,53,255));draw=ImageDraw.Draw(canvas)
-   for y in range(0,150,16):
+   im.thumbnail((430,115),Image.Resampling.NEAREST);canvas=Image.new('RGBA',(440,120),(35,42,53,255));draw=ImageDraw.Draw(canvas)
+   for y in range(0,120,16):
     for x in range(0,440,16):
      if (x//16+y//16)%2:draw.rectangle((x,y,x+15,y+15),fill=(43,51,63,255))
-   canvas.alpha_composite(im,((440-im.width)//2,(150-im.height)//2));photo=ImageTk.PhotoImage(canvas.convert('RGB'));self.photos.append(photo);label.configure(image=photo,width=440,height=150)
+   canvas.alpha_composite(im,((440-im.width)//2,(120-im.height)//2));photo=ImageTk.PhotoImage(canvas.convert('RGB'));self.photos.append(photo);label.configure(image=photo,width=440,height=120)
   notes='; '.join(r['warnings']) or 'Original compression space preserved.';self.details.set(f'{NAMES[r["character"]]} · internal frame {r["frame"]} · {r["statistics"]["changed_pixels"]:,} changed pixels · {r["fit"]["mode"]}. {notes}')
  def stop(self):self.cancel_event.set();self.status.set('Stopping after the current frame…');self.stop_button.state(['disabled'])
  def open_preview(self,event=None):
