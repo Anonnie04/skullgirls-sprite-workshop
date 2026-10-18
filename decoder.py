@@ -11,7 +11,7 @@ class Reader:
   result=self.b[self.pos:self.pos+n];self.pos+=n;return result
  def num(self,fmt):return struct.unpack('<'+fmt,self.read(struct.calcsize(fmt)))[0]
 
-def cmpimg(r):
+def cmpimg(r,legacy=False):
  n,w,h,used=struct.unpack('<4H',r.read(8));flags=r.num('B')
  assert n==w*h and w<256 and h<256 and used<=n
  assert flags&8
@@ -19,33 +19,40 @@ def cmpimg(r):
  mask=r.read((n+7)//8) if flags&16 else b''
  assert sum(int(x).bit_count() for x in mask)==used
  assert flags&32
+ # Pre-VRSN depots omit the art pointer and channel sizes for empty images.
+ if legacy and not n:
+  return dict(n=n,w=w,h=h,used=used,flags=flags,mask=mask.hex(),offset=-1,sizes=(0,0,0))
  offset=r.num('i');sizes=struct.unpack('<3i',r.read(12))
  return dict(n=n,w=w,h=h,used=used,flags=flags,mask=mask.hex(),offset=offset,sizes=sizes)
 
-def frame(r):
+def frame(r,legacy=False):
  origin=struct.unpack('<2i',r.read(8));art_bank=r.num('B');markers=r.num('B');r.read(markers*12)
  flags=r.num('B');images={}
  for i in range(8):
-  if flags&(1<<i):images[i]=cmpimg(r)
+  if flags&(1<<i):images[i]=cmpimg(r,legacy)
  offsets=struct.unpack('<10i',r.read(40))
  for _ in range(3):r.read(r.num('H')*16)
  return dict(origin=origin,art_bank=art_bank,images=images,offsets=offsets)
 
 def parse_frames_data(name,b,art_size):
- assert b[4:8]==b'VRSN' and struct.unpack_from('<I',b,8)[0] in (3,9), 'Unsupported FOIT version'
+ legacy=b[4:8]!=b'VRSN'
+ if not legacy:
+  assert struct.unpack_from('<I',b,8)[0] in (3,9), 'Unsupported FOIT version'
  for i in range(11,min(len(b)-30,300000)):
   n,w,h,used,flags=struct.unpack_from('<4HB',b,i)
-  if not (w and h and n==w*h and used and used<=n and w<150 and h<150 and flags&0x38==0x38):continue
+  empty=legacy and n==w==h==used==0 and flags&0x38==0x28
+  if not empty and not (w and h and n==w*h and used and used<=n and w<150 and h<150 and flags&0x38==0x38):continue
   k=i+9+(8 if flags&4 else 0)+(n+7)//8
   if k+16>len(b):continue
-  off,a,c,d=struct.unpack_from('<4i',b,k)
-  if off<0 or not (0<a and 0<c and 0<d and off+a+c+d<=art_size):continue
+  if not empty:
+   off,a,c,d=struct.unpack_from('<4i',b,k)
+   if off<0 or not (0<a and 0<c and 0<d and off+a+c+d<=art_size):continue
   start=i-11
   if b[start+9]!=0 or b[start+10]&1==0 or b[start-5]!=1:continue
   count=struct.unpack_from('<I',b,start-4)[0]
   if not 1<=count<20000:continue
   try:
-   r=Reader(b,start);frames=[frame(r) for _ in range(count)]
+   r=Reader(b,start);frames=[frame(r,legacy) for _ in range(count)]
    return frames
   except (AssertionError,struct.error):pass
  raise ValueError(f'No valid frame section for {name}')
@@ -150,8 +157,8 @@ def data_folder(game):
 
 def available_characters(game):
  p=data_folder(game)
- with GFS(p/'characters-art.gfs') as art:
-  return [name for name in NAMES if f'characters/{name}.art' in art.entries]
+ with GFS(p/'characters-art.gfs') as art,GFS(p/'sprites.gfs') as sprites:
+  return [name for name in NAMES if f'characters/{name}.art' in art.entries and f'sprites/{name}_1p.dds' in sprites.entries]
 
 class Cancelled(Exception):pass
 

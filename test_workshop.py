@@ -159,6 +159,29 @@ def run(report):
   legacy_backup,_=apply_import(legacy_prepared,check_running=False);restore_import(legacy_backup,check_running=False)
   assert legacy_original=={f.name:sha(f) for f in (legacy/'data01').glob('*.gfs')}
   passed.append('legacy temp archive paths support detection export import and verified restore')
+  # Early metadata has no VRSN header and omits pointer/size fields on empty images.
+  early=fixture(root/'PreVRSN');archive=early/'data01'/'characters-foits.gfs'
+  with GFS(archive) as contents:modern=contents.read('characters/annie.foit')
+  empty_image=struct.pack('<4HB',0,0,0,0,40)
+  empty_frame=struct.pack('<2iBBB',7,10,5,0,65)+empty_image*2+bytes(46)
+  preversion=modern[:4]+bytes(12)+b'\x01'+struct.pack('<I',6)+empty_frame+modern[21:]
+  make_gfs(archive,{'characters/annie.foit':preversion})
+  early_project,early_manifest=export_project(early,root/'Projects',['annie'])
+  assert early_manifest['status']=='complete' and early_manifest['characters']['annie']['frames']==6
+  assert early_manifest['characters']['annie']['exported']==5
+  assert [v['frame'] for v in early_manifest['exports'].values()][0]==1
+  early_route=next(iter(early_manifest['exports']))
+  shutil.copy2(early_project/'Output'/early_route,early_project/'Input'/early_route)
+  _,early_plan=prepare_import(early,early_project)
+  assert not early_plan['errors'] and len(early_plan['skipped'])==1
+  # An art entry alone cannot be exported without its palette.
+  art_path=early/'data01'/'characters-art.gfs'
+  with GFS(art_path) as contents:entries={key:contents.read(key) for key in contents.entries}
+  entries['characters/bossmarie.art']=b'placeholder';make_gfs(art_path,entries)
+  assert available_characters(early)==['annie']
+  expect_error(lambda:parse_frames_data('annie',modern[:8]+struct.pack('<I',99)+modern[12:],99999),'Unsupported FOIT version')
+  expect_error(lambda:parse_frames_data('annie',bytes(100),99999),'No valid frame section')
+  passed.append('pre-VRSN empty frames preserve numbering and export/import; missing palettes excluded; unknown versions refused')
   project,manifest=export_project(game,root/'Projects',['annie']);assert manifest['status']=='complete';assert len(manifest['exports'])==7
   assert not list((project/'Input').rglob('*.png'));od={p.relative_to(project/'Output').as_posix() for p in (project/'Output').rglob('*') if p.is_dir()};id={p.relative_to(project/'Input').as_posix() for p in (project/'Input').rglob('*') if p.is_dir()};assert od==id;passed.append('mirrored branches; Input empty; layered frames exported')
   tree_route=next(k for k,v in tree_manifest['exports'].items() if v['frame']==0)

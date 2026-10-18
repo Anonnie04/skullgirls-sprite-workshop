@@ -28,7 +28,7 @@ Skullgirls Project .../
 
 Imports preserve frame metadata, animation timing, origins, hitboxes, tile masks, palettes, archive lengths, and lighting normals. Artwork must fit the original tile coverage and compressed storage slots. Some frames need color or shading approximation, and stronger fitting can produce visible bands. Preview notes identify these changes. Material substitutions can look different with alternate palettes. Future game updates can require a new export or decoder changes.
 
-Current FOIT v9 and older v3 archives are supported, including older `temp` archive paths. Native CPU compression is used when available; GPU acceleration is not required. The first native compilation in an app session takes additional time.
+Current FOIT v9, older v3, and legacy archives without version headers are supported, including older `temp` archive paths. Characters without a default palette in the selected game version are excluded from the character list. Native CPU compression is used when available; GPU acceleration is not required. The first native compilation in an app session takes additional time.
 
 ## Documentation
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.6 — 2026-10-18
+
+- Support legacy FOIT metadata without version headers, including omitted storage fields on empty images and empty initial frames.
+- Exclude characters lacking a default palette in the selected depot so unavailable boss assets cannot stop a playable-character export.
+- Add regression coverage for pre-version-header exports and import preparation while retaining v3 and v9 checks.
+
 ## 0.2.5 — 2026-10-16
 
 - Give the workshop an original Skullgirls-inspired art-deco theme with burgundy panels, gold accents, cream text, and coordinated tabs, tables, dialogs, and keyboard-focus states.
