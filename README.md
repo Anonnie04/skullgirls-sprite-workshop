@@ -30,6 +30,8 @@ Imports preserve frame metadata, animation timing, origins, hitboxes, tile masks
 
 Current FOIT v9, older v3, and legacy archives without version headers are supported, including older `temp` archive paths. Characters without a default palette in the selected game version are excluded from the character list. Native CPU compression is used when available; GPU acceleration is not required. The first native compilation in an app session takes additional time.
 
+Legacy exports use the character metadata's embedded palette gradients. Re-export older projects created before v0.2.7 to replace incorrectly colored reference PNGs before editing or importing replacements.
+
 ## Documentation
 
 - [Making custom sprites](docs/CUSTOM_SPRITES.md)

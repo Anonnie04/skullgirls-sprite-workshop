@@ -95,6 +95,45 @@ def decode_image(meta,art,selected_channels=(0,1,2)):
  assert j==count
  return canvas
 
+def legacy_palette(data):
+ """Expand embedded gradient ranges into a table indexed by stored art bytes."""
+ candidates=[]
+ for trailer in (8,10):
+  try:
+   r=Reader(data,struct.unpack_from('<I',data)[0])
+   r.read(r.num('B'));r.read(4)
+   assert r.num('B')==1
+   count=r.num('H');assert 1<=count<=256
+   default=None
+   for _ in range(count):
+    size=r.num('H');assert 1<=size<=256
+    colors=np.frombuffer(r.read(size*4),dtype=np.uint8).reshape(size,4)[:,[2,1,0,3]].astype(float)
+    if default is None:default=colors
+    # Two auxiliary colors; later depots add a two-byte palette field.
+    r.read(trailer)
+   groups=r.num('B');assert groups>0
+   palette=np.zeros((len(default),16,4),float);previous=-1
+   for _ in range(groups):
+    low=r.num('B');high=r.num('B');r.read(2);label=r.read(r.num('B'))
+    assert low==previous+1 and low<=high<len(default)
+    assert label and all(32<=value<127 for value in label)
+    points=default[low:high+1][::-1]
+    x=np.linspace(0,len(points)-1,16);left=x.astype(int);right=np.minimum(left+1,len(points)-1);t=(x-left)[:,None]
+    palette[low:high+1]=np.floor(points[left]*(1-t)+points[right]*t)
+    previous=high
+   assert previous==len(default)-1
+   candidates.append(palette)
+  except (AssertionError,struct.error,IndexError,ValueError):pass
+ if len(candidates)!=1:raise ValueError('Cannot read legacy character palette gradients. Export refused to avoid incorrect colors.')
+ return candidates[0]
+
+
+def load_palette(name,data,sprites):
+ if data[4:8]!=b'VRSN':return legacy_palette(data)
+ with Image.open(io.BytesIO(sprites.read(f'sprites/{name}_1p.dds'))) as image:
+  return np.asarray(image.convert('RGBA'),dtype=float)
+
+
 def colorize(raw,palette):
  idx=raw[:,:,2].astype(int)
  idx=np.minimum(idx,len(palette)-1) # Palette sampler clamps at the texture edge.
@@ -185,7 +224,7 @@ def extract(game,output,characters,progress=lambda *args:None,cancel=None,save_l
    total=sum(min(len(f),limit) if limit is not None else len(f) for f in parsed.values())
    for name,frames in parsed.items():
     art_banks={5:art_archive.read(f'characters/{name}.art'),4:pt_archive.read(f'characters/{name}.art-pt')}
-    with Image.open(io.BytesIO(sprites.read(f'sprites/{name}_1p.dds'))) as image:pal=np.array(image.convert('RGBA')).astype(float)
+    pal=load_palette(name,foit_archive.read(f'characters/{name}.foit'),sprites)
     folder=run/NAMES[name];folder.mkdir();records=[]
     selected=frames[:limit] if limit is not None else frames
     for i,f in enumerate(selected):

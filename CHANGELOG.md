@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7 — 2026-10-18
+
+- Correct legacy sprite colors using embedded character palette gradients and material ranges instead of DDS row indices.
+- Use the same legacy palette interpretation for exports, silhouette matching, replacement previews, and imports.
+- Validate both older palette layouts and add color, transparency, and verified import/restore regressions.
+
 ## 0.2.6 — 2026-10-18
 
 - Support legacy FOIT metadata without version headers, including omitted storage fields on empty images and empty initial frames.

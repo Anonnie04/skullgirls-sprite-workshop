@@ -39,6 +39,21 @@ def expect_error(callback,contains):
   assert contains.casefold() in str(exc).casefold(),str(exc);return
  raise AssertionError('Expected operation to be refused: '+contains)
 
+def legacy_metadata(modern,trailer=8,colors=None,groups=None,empty=False):
+ if colors is None:colors=np.array([[0,0,0,0],[100,160,220,255],[200,210,180,255],[220,45,45,255]],np.uint8)
+ if groups is None:groups=[(i,i) for i in range(len(colors))]
+ name=b'Annie';header=bytes([len(name)])+name+bytes(4)+b'\x01'+struct.pack('<H',1)
+ header+=struct.pack('<H',len(colors))+colors[:,[2,1,0,3]].tobytes()+bytes(trailer)
+ header+=bytes([len(groups)])
+ for i,(low,high) in enumerate(groups):
+  label=f'material{i}'.encode();header+=struct.pack('<BBH',low,high,0)+bytes([len(label)])+label
+ count=struct.unpack_from('<I',modern,17)[0];frames=modern[21:]
+ if empty:
+  image=struct.pack('<4HB',0,0,0,0,40)
+  frames=struct.pack('<2iBBB',7,10,5,0,65)+image*2+bytes(46)+frames;count+=1
+ return struct.pack('<I',4)+header+b'\x01'+struct.pack('<I',count)+frames
+
+
 def run(report):
  report=Path(report).resolve();root=unique(report.parent/'Test Runs','Workshop tests');passed=[]
  try:
@@ -162,9 +177,7 @@ def run(report):
   # Early metadata has no VRSN header and omits pointer/size fields on empty images.
   early=fixture(root/'PreVRSN');archive=early/'data01'/'characters-foits.gfs'
   with GFS(archive) as contents:modern=contents.read('characters/annie.foit')
-  empty_image=struct.pack('<4HB',0,0,0,0,40)
-  empty_frame=struct.pack('<2iBBB',7,10,5,0,65)+empty_image*2+bytes(46)
-  preversion=modern[:4]+bytes(12)+b'\x01'+struct.pack('<I',6)+empty_frame+modern[21:]
+  preversion=legacy_metadata(modern,empty=True)
   make_gfs(archive,{'characters/annie.foit':preversion})
   early_project,early_manifest=export_project(early,root/'Projects',['annie'])
   assert early_manifest['status']=='complete' and early_manifest['characters']['annie']['frames']==6
@@ -174,6 +187,31 @@ def run(report):
   shutil.copy2(early_project/'Output'/early_route,early_project/'Input'/early_route)
   _,early_plan=prepare_import(early,early_project)
   assert not early_plan['errors'] and len(early_plan['skipped'])==1
+  from decoder import legacy_palette
+  controls=np.array([[0,0,0,0],[240,180,120,255],[120,90,60,255],[30,20,10,255],[220,30,40,100],[110,15,20,100]],np.uint8)
+  for trailer in [8,10]:
+   table=legacy_palette(legacy_metadata(modern,trailer,controls,[(0,0),(1,3),(4,5)]))
+   assert np.array_equal(table[1],table[2]) and np.array_equal(table[1],table[3])
+   assert np.array_equal(table[1,0],controls[3]) and np.array_equal(table[1,-1],controls[1])
+   assert np.array_equal(table[1,1],[42,29,16,255])
+   assert np.array_equal(table[4],table[5]) and np.all(table[4,:,3]==100)
+   probe=np.array([[[0,31,2],[0,0,2],[0,31,5]]],np.uint8)
+   assert np.array_equal(np.array(colorize(probe,table))[0],[[240,180,120,254],[30,20,10,254],[220,30,40,200]])
+  expect_error(lambda:legacy_palette(preversion[:20]),'legacy character palette')
+  # Embedded colors, rather than the deliberately different DDS gradients, render exports.
+  first=np.array(Image.open(early_project/'Output'/early_route).convert('RGBA'))
+  assert np.any(np.all(first==[100,160,220,254],axis=2))
+  with GFS(archive) as contents:table=load_palette('annie',contents.read('characters/annie.foit'),None)
+  with GFS(early/'data01'/'characters-art.gfs') as contents:
+   fs=parse_frames_data('annie',preversion,contents.entries['characters/annie.art'][1]);bank=contents.read('characters/annie.art')
+   assert np.array_equal(np.array(matching_silhouette(fs[1]['images'][0],bank,table))[:,:,3],first[:,:,3])
+  first[4:12,4:12]=[220,45,45,254];Image.fromarray(first).save(early_project/'Input'/early_route)
+  prepared,plan=prepare_import(early,early_project)
+  assert len(plan['patches'])==1 and not plan['errors'],plan
+  early_original={f.name:sha(f) for f in (early/'data01').glob('*.gfs')}
+  backup,_=apply_import(prepared,check_running=False);restore_import(backup,check_running=False)
+  assert early_original=={f.name:sha(f) for f in (early/'data01').glob('*.gfs')}
+  passed.append('legacy embedded gradients render correct RGB alpha and silhouettes; both palette layouts and verified import/restore')
   # An art entry alone cannot be exported without its palette.
   art_path=early/'data01'/'characters-art.gfs'
   with GFS(art_path) as contents:entries={key:contents.read(key) for key in contents.entries}

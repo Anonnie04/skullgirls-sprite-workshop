@@ -4,7 +4,7 @@ import datetime,hashlib,io,json,os,shutil,struct,ctypes,tempfile
 import numpy as np
 from PIL import Image
 from scipy.spatial import cKDTree
-from decoder import GFS,NAMES,data_folder,parse_frames_data,decode_image,colorize,Cancelled,rle
+from decoder import GFS,NAMES,data_folder,parse_frames_data,decode_image,colorize,Cancelled,rle,load_palette
 from compression import encode_exact,optimize_ignored_brightness,optimize_equivalent_indices
 from layout import Catalog,reference_folder,descriptor,compendium_route
 from decoder import available_characters
@@ -162,7 +162,7 @@ def export_project(game,parent,characters,progress=lambda *a:None,cancel=None,li
      route=catalog.convert(rel)
      safe_path(out,route).parent.mkdir(parents=True,exist_ok=True);safe_path(inp,route).parent.mkdir(parents=True,exist_ok=True)
     banks={5:art.read(f'characters/{name}.art'),4:pt.read(f'characters/{name}.art-pt')}
-    with Image.open(io.BytesIO(sprites.read(f'sprites/{name}_1p.dds'))) as im:palette=np.asarray(im.convert('RGBA'),dtype=float)
+    palette=load_palette(name,foit.read(f'characters/{name}.foit'),sprites)
     selected=frames if limit is None else frames[:limit]
     for index,fr in enumerate(selected):
      stopped(cancel)
@@ -416,7 +416,7 @@ def resolve_frame_routes(source,name,frames,palette,banks,project,progress,cance
  cache=project.parent/'.skullgirls-cache';catalog=Catalog(source.parent,name,cache,progress,cancel)
  # Content hashes protect the persistent map from updates and art replacements.
  identity=hashlib.sha256()
- identity.update(b'frame-routes-v2');identity.update(catalog.stamp.encode())
+ identity.update(b'frame-routes-v3');identity.update(catalog.stamp.encode())
  identity.update(json.dumps(frames,sort_keys=True).encode());identity.update(palette.tobytes())
  for bank in sorted(banks):identity.update(banks[bank])
  path=cache/f'{name}-routes-{identity.hexdigest()}.json'
@@ -475,7 +475,7 @@ def prepare_import(game,project,progress=lambda *a:None,cancel=None):
       b=foit.read(f'characters/{name}.foit')
       if hashlib.sha256(b).hexdigest()!=manifest['characters'][name]['foit_sha256']:raise ValueError('Character metadata changed since export. Export a new project.')
       fs=parse_frames_data(name,b,art.entries[f'characters/{name}.art'][1])
-      with Image.open(io.BytesIO(sprites.read(f'sprites/{name}_1p.dds'))) as im:pal=np.array(im.convert('RGBA'),dtype=float)
+      pal=load_palette(name,b,sprites)
       loaded[name]=(fs,pal,{5:art.read(f'characters/{name}.art'),4:pt.read(f'characters/{name}.art-pt')})
      frames,palette,banks=loaded[name][:3]
      if entry['frame'] is None:
