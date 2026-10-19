@@ -17,6 +17,6 @@ Use Windows x64 and Python 3.12. Install `requirements-dev.txt` and run `python 
 | `test_workshop.py` | Synthetic archive and UI integration checks |
 | `scripts/build_release.py` | Portable and source release packaging |
 
-Keep game archives, user projects, previews, backups, and extracted artwork outside the repository. Tests should use generated fixtures. Preserve byte-identical protected metadata and palettes, fixed slot boundaries, normals, input integrity checks, and rollback behavior. Add a focused regression test for changes to those guarantees.
+Keep game archives, user projects, previews, backups, and extracted artwork outside the repository. Tests should use generated fixtures. Preserve byte-identical palettes, animation metadata, normals, input integrity checks, and rollback behavior. Relocated imports may change art storage pointers, channel lengths, and brightness encoding flags only; verify every other metadata byte and all untouched assets. Keep validation for older fixed-slot plans. Add focused regression tests for changes to these guarantees.
 
 Bug reports should identify the app version, game/depot version, selected character, steps, expected result, actual result, and the error text. An animation name and frame/layer identifier help diagnose matching issues.

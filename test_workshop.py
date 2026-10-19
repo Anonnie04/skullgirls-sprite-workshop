@@ -445,13 +445,16 @@ def run(report):
   import zipfile
   with zipfile.ZipFile(mod_folder/mods[0]['file']) as archive:
    info=json.loads(archive.read('mod.json'));assert info['id'].startswith('spriteworkshop.annie.') and info['version']=='1.0.0'
-   assert set(archive.namelist())=={'mod.json','characters-art.gfs/characters/annie.art','characters-art-pt.gfs/characters/annie.art-pt'}
+   assert set(archive.namelist())=={'mod.json','characters-art.gfs/characters/annie.art','characters-art-pt.gfs/characters/annie.art-pt','characters-foits.gfs/characters/annie.foit'}
+   metadata=archive.read('characters-foits.gfs/characters/annie.foit')
+   new_frames=parse_frames_data('annie',metadata,len(archive.read('characters-art.gfs/characters/annie.art')))
    for bank,(archive_name,suffix) in ART_FILES.items():
     with GFS(game/'data01'/archive_name) as original_archive:
      offset,size=original_archive.entries[f'characters/annie{suffix}'];expected=bytearray(original_archive.read(f'characters/annie{suffix}'))
     for record in plan['patches']:
      if record['art_bank']==bank:
-      start=record['offset']-offset;expected[start:start+record['bytes']]=(prepared/record['payload']).read_bytes()
+      start=len(expected);expected.extend((prepared/record['payload']).read_bytes())
+      assert new_frames[record['frame']]['images'][record['layer']]['offset']==start
     assert archive.read(archive_name+'/characters/annie'+suffix)==expected
   assert {p.name:sha(p) for p in (game/'data01').glob('*.gfs')}==original
   assert json.loads((prepared/'plan.json').read_text())['status']=='prepared' and not (project/'Backups').exists()
@@ -468,7 +471,15 @@ def run(report):
   finally:engine.game_running=original_check
   passed.append('running game blocks writes')
   before={p.name:sha(p) for p in (game/'data01').glob('*.gfs')};assert before==original
-  backup,receipt=apply_import(prepared,check_running=False);assert receipt['status']=='installed';assert sha(game/'data01'/'characters-foits.gfs')==original['characters-foits.gfs'];assert sha(game/'data01'/'sprites.gfs')==original['sprites.gfs'];passed.append('apply verified; metadata and palettes byte-identical')
+  backup,receipt=apply_import(prepared,check_running=False);assert receipt['status']=='installed';assert sha(game/'data01'/'sprites.gfs')==original['sprites.gfs']
+  with GFS(game/'data01'/'characters-foits.gfs') as changed,GFS(backup/'characters-foits.gfs') as old:
+   old_data=old.read('characters/annie.foit');new_data=changed.read('characters/annie.foit');fs,positions=parse_frames_data('annie',old_data,100000,with_locations=True);allowed=set()
+   for record in plan['patches']:
+    for j,k in record['affected_references']:
+     pos=positions[j,k];allowed.update(range(pos,pos+16));meta=fs[j]['images'][k]
+     allowed.add(pos-len(bytes.fromhex(meta['mask']))-(8 if meta['flags']&4 else 0)-1)
+   assert len(old_data)==len(new_data) and all(a==b or i in allowed for i,(a,b) in enumerate(zip(old_data,new_data)))
+  passed.append('relocated apply verified; only art storage references change in metadata; palettes byte-identical')
   expect_error(lambda:apply_import(prepared,check_running=False),'no prepared replacements');passed.append('double apply refused')
   # Refuse restoring over newer modifications.
   path=game/'data01'/'characters-art.gfs';saved_archive=path.read_bytes();path.write_bytes(saved_archive[:-1]+bytes([saved_archive[-1]^1]));expect_error(lambda:restore_import(backup,check_running=False),'game has changed');path.write_bytes(saved_archive);passed.append('restore over newer changes refused')
@@ -486,11 +497,62 @@ def run(report):
   cancel=threading.Event();cancel.set();cancelled,m=export_project(game,root/'Projects',['annie'],cancel=cancel);assert m['status']=='cancelled';assert not list((cancelled/'Input').rglob('*.png'));passed.append('cancelled export leaves valid empty Input')
   review_regressions(root,passed)
   mod_zip_regressions(root,passed)
+  relocation_regressions(root,passed)
   result=dict(status='passed',native_cpu_available=codec.native_optimal is not None,checks=passed,project=str(project),game_fixture=str(game))
  except Exception as exc:
   import traceback
   result=dict(status='failed',checks=passed,error=str(exc),traceback=traceback.format_exc(),test_root=str(root));write_json(report,result);raise
  write_json(report,result);print(json.dumps(result,indent=2),flush=True);return result
+
+def relocation_regressions(root,passed):
+ """A detailed translucent edit must grow, not be recolored to fit 12 bytes."""
+ from compression import header
+ from unittest.mock import patch
+ import repacking
+ root=root/'Oversized';root.mkdir();game=fixture(root);data=game/'data01'
+ with GFS(data/'characters-foits.gfs') as archive:metadata=bytearray(archive.read('characters/annie.foit'))
+ frames,positions=parse_frames_data('annie',metadata,100000,with_locations=True)
+ streams=[header(256,True)+bytes([v]) for v in [0,0,1]]
+ with GFS(data/'characters-art.gfs') as archive:bank=bytearray(archive.read('characters/annie.art'))
+ bank[:12]=b''.join(streams);struct.pack_into('<4i',metadata,positions[0,0],0,4,4,4);metadata[positions[0,0]-2]|=64
+ make_gfs(data/'characters-art.gfs',{'characters/annie.art':bank,'untouched.bin':b'unchanged payload'})
+ make_gfs(data/'characters-foits.gfs',{'characters/annie.foit':metadata,'untouched.bin':b'unchanged metadata'})
+ with GFS(data/'sprites.gfs') as archive:
+  with Image.open(io.BytesIO(archive.read('sprites/annie_1p.dds'))) as image:palette=np.array(image.convert('RGBA'))
+ palette[3,:,3]=192;dds=io.BytesIO();Image.fromarray(palette).save(dds,format='DDS');make_gfs(data/'sprites.gfs',{'sprites/annie_1p.dds':dds.getvalue()})
+ project,manifest=export_project(game,root/'Projects',['annie'],limit=1);route=next(iter(manifest['exports']))
+ raw=np.zeros((16,16,3),np.uint8);rng=np.random.default_rng(734);raw[:,:,1]=rng.integers(0,32,(16,16));raw[:,:,2]=rng.integers(1,4,(16,16))
+ expected=np.array(colorize(raw,palette));Image.fromarray(expected).save(project/'Input'/route)
+ baseline={p.name:sha(p) for p in data.glob('*.gfs')}
+ prepared,plan=prepare_import(game,project);assert not plan['errors'] and len(plan['patches'])==1
+ record=plan['patches'][0];assert record['bytes']>12
+ with Image.open(prepared/record['after']) as preview:assert np.array_equal(np.array(preview),expected)
+ assert not record['warnings'] and record['statistics']['brightness_levels']==32 and not record['encoded_flags']&64
+ # Reject fabricated channel sizes, even if the payload hash is still valid.
+ saved=(prepared/'plan.json').read_bytes();record['encoded_sizes'][1]+=1;write_json(prepared/'plan.json',plan)
+ expect_error(lambda:validate_prepared(prepared),'art slot');(prepared/'plan.json').write_bytes(saved)
+ # Fail after the first archive replacement and prove full rollback.
+ replace=Path.replace;calls=[]
+ def fail_second(path,target):
+  if path.parent.name.startswith('.workshop-import-'):
+   calls.append(path)
+   if len(calls)==2:raise OSError('injected install failure')
+  return replace(path,target)
+ with patch.object(Path,'replace',fail_second):expect_error(lambda:apply_import(prepared,check_running=False),'injected install failure')
+ assert {p.name:sha(p) for p in data.glob('*.gfs')}==baseline
+ backup,receipt=apply_import(prepared,check_running=False)
+ with GFS(data/'characters-art.gfs') as art,GFS(data/'characters-foits.gfs') as foit:
+  assert art.read('untouched.bin')==b'unchanged payload' and foit.read('untouched.bin')==b'unchanged metadata'
+  fs=parse_frames_data('annie',foit.read('characters/annie.foit'),len(art.read('characters/annie.art')))
+  decoded=decode_image(fs[0]['images'][0],art.read('characters/annie.art'))
+  assert np.array_equal(np.array(colorize(decoded,palette)),expected)
+  assert np.all(decoded[:,:,0]==0)
+ # The same project remains usable after its own pointer updates.
+ _,again=prepare_import(game,project);assert not again['patches'] and not again['errors']
+ restore_import(backup,check_running=False);assert {p.name:sha(p) for p in data.glob('*.gfs')}==baseline
+ _,again=prepare_import(game,project);assert len(again['patches'])==1 and not again['errors']
+ passed.append('oversized translucent artwork grows without color correction; exact rendered pixels, untouched assets, rollback and restore verified')
+
 
 def mod_zip_regressions(root,passed):
  import zipfile,time
@@ -566,12 +628,8 @@ def review_regressions(root,passed):
   with Image.open(project/'Output'/route) as im:pixels=np.array(im.convert('RGBA'))
   pixels[4:12,4:12]=[180,35,35,254];Image.fromarray(pixels).save(project/'Input'/route)
  prepared,plan=prepare_import(game,project);assert len(plan['patches'])==2
- # Apply validates slot payloads without reading full art banks.
- original_read=GFS.read
- def slot_read(self,name):
-  assert not name.endswith(('.art','.art-pt')),'Apply read a complete art bank'
-  return original_read(self,name)
- with patch.object(GFS,'read',slot_read):backup,receipt=apply_import(prepared,check_running=False)
+ # The relocation path rebuilds complete assets and verifies untouched entries.
+ backup,receipt=apply_import(prepared,check_running=False)
  original_copy=shutil.copy2;calls=[]
  def fail_second(src,dst,*args,**kwargs):
   calls.append(src)
@@ -591,7 +649,7 @@ def review_regressions(root,passed):
  (data/names[1]).write_bytes(original)
  restore_import(backup,check_running=False)
  assert all(sha(data/name)==digest for name,digest in receipt['before'].items())
- passed.append('interrupted restore preserves complete archives, resumes safely, and rejects newer changes; apply validates slots only')
+ passed.append('interrupted restore preserves complete archives, resumes safely, and rejects newer changes after art relocation')
  # Cancel on the last unresolved route, after another patch is ready.
  manifest['exports'][routes[1]]['frame']=None;write_json(project/'project.json',manifest)
  event=threading.Event()

@@ -4,6 +4,7 @@ import datetime,hashlib,io,json,os,shutil,struct,ctypes,tempfile,zipfile
 import numpy as np
 from PIL import Image
 from scipy.spatial import cKDTree
+from functools import lru_cache
 from decoder import GFS,NAMES,data_folder,parse_frames_data,decode_image,colorize,Cancelled,rle,load_palette
 from compression import encode_exact,optimize_ignored_brightness,optimize_equivalent_indices
 from layout import Catalog,reference_folder,descriptor,compendium_route
@@ -196,7 +197,7 @@ def export_project(game,parent,characters,progress=lambda *a:None,cancel=None,li
   manifest['status']='failed';manifest['errors'].append(dict(error=str(exc)));raise
  finally:
   write_json(project/'project.json',manifest)
-  (project/'README.txt').write_text('Output contains exported PNGs, grouped like the Digital Art Compendium.\nInput mirrors the same directories and starts empty. Place only replacement PNGs in Input, at the matching relative paths.\nPrepare an import to review how each PNG fits and renders before applying it. Unchanged files are skipped.\nFor layered frames, edit the individual PNGs in the layers subfolder; the composite is a reference.\nFrames with no reliable Compendium match are in data/unmapped/internal_frames and remain importable through project.json.\nImport changes art bytes only. Frame metadata, palettes, animation timing and hitboxes stay unchanged.\nPalette and compression limits may require color approximation. Backups include a verified restore manifest.\n',encoding='utf-8')
+  (project/'README.txt').write_text('Output contains exported PNGs, grouped like the Digital Art Compendium.\nInput mirrors the same directories and starts empty. Place only replacement PNGs in Input, at the matching relative paths.\nPrepare an import to review how each PNG fits and renders before applying it. Unchanged files are skipped.\nFor layered frames, edit the individual PNGs in the layers subfolder; the composite is a reference.\nFrames with no reliable Compendium match are in data/unmapped/internal_frames and remain importable through project.json.\nImport updates art streams and their storage references. Palettes, animation timing, hitboxes, masks and normals stay unchanged.\nThe installed palette still limits available colors; compressed storage does not force color approximation. Backups include a verified restore manifest.\n',encoding='utf-8')
  return project,manifest
 
 def fit_image(image,before):
@@ -224,10 +225,19 @@ def fit_image(image,before):
  return fitted,dict(mode='scaled and aligned',scale=ratio,alignment=[x,y])
 
 def color_table(palette,levels,bands):
+ return cached_color_table(palette.shape,palette.astype(np.float64).tobytes(),tuple(levels),tuple(bands))
+
+@lru_cache(maxsize=64)
+def cached_color_table(shape,data,levels,bands):
+ palette=np.frombuffer(data,dtype=np.float64).reshape(shape)
  pairs=np.array([(b*32+i,idx) for idx in bands for b in range(8) for i in levels],np.uint8)
  raw=np.zeros((1,len(pairs),3),np.uint8);raw[0,:,1:]=pairs
  rgba=np.array(colorize(raw,palette))[0].astype(float);rgba[:,:3]*=rgba[:,3:4]/255;rgba[:,3]*=2**0.5
- return cKDTree(rgba),pairs
+ # Repeated palette rows and outlined black produce many identical samples.
+ # One representative keeps nearest-color queries fast for large old frames;
+ # the existing per-material tie pass still preserves original materials.
+ _,first=np.unique(rgba,axis=0,return_index=True);first.sort()
+ return cKDTree(rgba[first]),pairs[first]
 
 def white_materials(palette):
  # Only opaque palette rows with an actual near-white sample are candidates.
@@ -282,37 +292,40 @@ def optimize_nearby_brightness(g,index,palette,free,max_error=8,locked=None):
  if locked is not None:contexts[locked]=base+8+g[locked].astype(np.int32)
  return optimize_equivalent_indices(g,contexts,groups,preferred=np.where(free,-1,g.astype(np.int16)).ravel())
 
-def encode_replacement(meta,art,palette,input_pixels):
+def encode_replacement(meta,art,palette,input_pixels,unrestricted=False):
  raw=decode_image(meta,art);used=np.zeros(raw.shape[:2],bool);mask=bytes.fromhex(meta['mask']);tiles=[]
  for t in range(meta['n']):
   if mask[t//8]&(1<<(t%8)):
    y,x=divmod(t,meta['w']);tiles.append((y,x));used[y*16:y*16+16,x*16:x*16+16]=True
  if not tiles:raise ValueError('The frame contains no editable art tiles.')
  stored_g=None
- if meta['flags']&64:
+ if meta['flags']&64 and not unrestricted:
   offset=meta['offset']+meta['sizes'][0]
   stored_g=rle(art[offset:offset+meta['sizes'][1]],meta['used']*256).reshape(16,-1)
  clipped=int(np.sum((input_pixels[:,:,3]>128)&~used))
  # Preserve exact colors/materials for pixels that the user left unchanged.
  before=np.array(colorize(raw,palette));unchanged=np.all(input_pixels==before,axis=2)
- colors=input_pixels.astype(float).reshape(-1,4);colors[:,:3]*=colors[:,3:4]/255;colors[:,3]*=2**0.5
+ unique_colors,inverse=np.unique(np.ascontiguousarray(input_pixels).reshape(-1,4).view(np.uint32).ravel(),return_inverse=True)
+ colors=unique_colors.view(np.uint8).reshape(-1,4).astype(float);colors[:,:3]*=colors[:,3:4]/255;colors[:,3]*=2**0.5
  original_indices=raw[:,:,2].ravel();attempts=[];equivalent_groups=None
  # Original material bands plus existing opaque colors avoid animated-effect
  # palette bands, which caused speckled edges in the initial experiment.
  bands=[0]+[i for i in range(1,len(palette)) if np.all(palette[i,:,3]==255)]
+ if unrestricted:bands=list(range(min(256,len(palette))))
  full=list(range(32));nine=[0,4,8,12,16,20,24,28,31]
  settings=[(full,0),(full,2),(full,4),(nine,0),(nine,4),([0,8,16,24,31],0),([0,8,16,24,31],4),([0,16,31],0),([0,16,31],4),([0,31],0),([0,31],4)]
  # First try the closest palette with lossless storage optimization only.
  # Visible fitting and the original material bias are fallback passes.
  settings=[(full,0,None,False,False),(full,0,None,False,True)]+[(levels,tolerance,None,True,True) for levels,tolerance in settings]+[(full,0,-1,True,True)]+[(full,0,band,True,True) for band in white_materials(palette)]
+ if unrestricted:settings=[(full,0,None,False,False)]
  delta=np.max(np.abs(input_pixels.astype(np.int16)-before.astype(np.int16)),axis=2)
  for levels,tolerance,white_band,material_bias,allow_shading in settings:
   preserve=delta<=tolerance
-  tree,pairs=color_table(palette,levels,bands);dist,indices=tree.query(colors,workers=1);chosen=pairs[indices].copy()
+  tree,pairs=color_table(palette,levels,bands);distance,indices=tree.query(colors,workers=1);dist=distance[inverse];chosen=pairs[indices[inverse]].copy()
   biased_pixels=np.zeros(len(original_indices),bool)
   for band in np.unique(original_indices):
    where=np.flatnonzero(original_indices==band);local_tree,local_pairs=color_table(palette,levels,[int(band)])
-   local_dist,local=local_tree.query(colors[where],workers=1);prefer=local_dist**2<=dist[where]**2+(16384 if material_bias else 1e-8);chosen[where[prefer]]=local_pairs[local[prefer]]
+   active,back=np.unique(inverse[where],return_inverse=True);local_dist,local=local_tree.query(colors[active],workers=1);local_dist=local_dist[back];local=local[back];prefer=local_dist**2<=dist[where]**2+(16384 if material_bias else 1e-8);chosen[where[prefer]]=local_pairs[local[prefer]]
    biased_pixels[where[prefer]]=local_dist[prefer]**2>dist[where[prefer]]**2+1e-8
   modified=raw.copy();modified[:,:,1:]=chosen.reshape(*raw.shape[:2],2);modified[preserve]=raw[preserve];modified[~used,1:]=0
   white_swaps=0
@@ -339,12 +352,12 @@ def encode_replacement(meta,art,palette,input_pixels):
     if len(stream)<len(g_stream):g=candidate;g_stream=stream
     if len(g_stream)<=meta['sizes'][1]:break
   storage_index_swaps=0
-  if len(index_stream)>meta['sizes'][2]:
+  if not unrestricted and len(index_stream)>meta['sizes'][2]:
    if equivalent_groups is None:equivalent_groups=equivalent_material_groups(palette)
    optimized,minimum=optimize_equivalent_indices(strip[:,:,2],strip[:,:,1],equivalent_groups)
    if minimum<len(index_stream):
     storage_index_swaps=int(np.sum(optimized!=strip[:,:,2].ravel()));strip[:,:,2]=optimized.reshape(g.shape);index_stream=encode_exact(optimized,None)[0]
-  if len(g_stream)>meta['sizes'][1] and len(index_stream)<=meta['sizes'][2]:
+  if not unrestricted and len(g_stream)>meta['sizes'][1] and len(index_stream)<=meta['sizes'][2]:
    free=(g>>5)==7
    if stored_g is not None:free[:]=False;free[1:15:2]=True
    if free.any():
@@ -383,10 +396,12 @@ def encode_replacement(meta,art,palette,input_pixels):
     if brightness_color_tolerance:break
   strip[:,:,1]=g
   short=[g_stream,index_stream];sizes=list(map(len,short));attempts.append(dict(levels=len(levels),near_color_tolerance=tolerance,white_material=white_band,white_swaps=white_swaps,material_bias=material_bias,allow_shading=allow_shading,compressed=sizes))
-  if all(n<=limit for n,limit in zip(sizes,meta['sizes'][1:])):
-   encoded=[encode_exact(strip[:,:,c].ravel(),meta['sizes'][c])[0] for c in [1,2]]
+  if unrestricted or all(n<=limit for n,limit in zip(sizes,meta['sizes'][1:])):
+   encoded=[encode_exact(strip[:,:,c].ravel(),None if unrestricted else meta['sizes'][c])[0] for c in [1,2]]
    start=meta['offset'];payload=art[start:start+meta['sizes'][0]]+b''.join(encoded)
-   decoded=decode_image(meta,art[:start]+payload+art[start+len(payload):])
+   encoded_sizes=[meta['sizes'][0]]+list(map(len,encoded))
+   encoded_flags=meta['flags']&~64 if unrestricted else meta['flags']
+   decoded=decode_image({**meta,'offset':0,'sizes':encoded_sizes,'flags':encoded_flags},payload)
    assert np.array_equal(decoded[:,:,0],raw[:,:,0])
    preview=colorize(decoded,palette);changed=int(np.any(np.array(preview)!=before,axis=2).sum());shading_max_error=0;shading_adjusted_pixels=0
    if brightness_color_tolerance or storage_index_swaps:
@@ -400,7 +415,7 @@ def encode_replacement(meta,art,palette,input_pixels):
     shading_max_error=int(difference.max())
     if not np.array_equal(actual[:,:,3],expected[:,:,3]) or shading_max_error>(brightness_color_tolerance+4 if brightness_color_tolerance else 0):continue
     shading_adjusted_pixels=int(np.any(difference>0,axis=2).sum())
-   return payload,preview,dict(material_color_changes=int(np.sum(biased_pixels.reshape(used.shape)&used&~preserve)),palette_selection='original material fallback' if material_bias else 'closest palette',changed_pixels=changed,brightness_levels=len(levels),near_color_tolerance=tolerance,white_material=white_band,white_swaps=white_swaps,storage_index_swaps=storage_index_swaps,brightness_color_tolerance=brightness_color_tolerance,shading_max_error=shading_max_error,shading_adjusted_pixels=shading_adjusted_pixels,clipped_pixels=clipped,compression_attempts=attempts)
+   return payload,preview,dict(encoded_flags=encoded_flags,encoded_sizes=encoded_sizes,material_color_changes=int(np.sum(biased_pixels.reshape(used.shape)&used&~preserve)),palette_selection='original material fallback' if material_bias else 'closest palette',changed_pixels=changed,brightness_levels=len(levels),near_color_tolerance=tolerance,white_material=white_band,white_swaps=white_swaps,storage_index_swaps=storage_index_swaps,brightness_color_tolerance=brightness_color_tolerance,shading_max_error=shading_max_error,shading_adjusted_pixels=shading_adjusted_pixels,clipped_pixels=clipped,compression_attempts=attempts)
  raise ValueError('Replacement exceeds this frame’s fixed compression space, even after color fitting. Try fewer colors or a smaller edit. Game files were not changed. '+f'Final channel sizes {sizes}; slot limits {list(meta["sizes"][1:])}.')
 
 def matching_silhouette(meta,bank,palette):
@@ -456,7 +471,7 @@ def resolve_frame_routes(source,name,frames,palette,banks,project,progress,cance
 def prepare_import(game,project,progress=lambda *a:None,cancel=None):
  source=data_folder(game);project,manifest=project_info(project);found,unknown=scan_input(project)
  if not found and not unknown:raise ValueError('Input contains no PNGs. Place replacement files in its empty folders first.')
- prepared=unique(project/'Prepared','Import');plan=dict(schema=SCHEMA,game=str(source),project=str(project),status='prepared',patches=[],errors=[],skipped=[],source_hashes={},input_hashes={},protected_hashes={})
+ prepared=unique(project/'Prepared','Import');plan=dict(schema=SCHEMA,storage='relocatable',game=str(source),project=str(project),status='prepared',patches=[],errors=[],skipped=[],source_hashes={},input_hashes={},protected_hashes={})
  for rel in unknown:plan['errors'].append(dict(path=rel,error='No exported frame matches this path. Use the same relative path as Output.'))
  try:
   with GFS(source/'characters-art.gfs') as art,GFS(source/'characters-art-pt.gfs') as pt,GFS(source/'characters-foits.gfs') as foit,GFS(source/'sprites.gfs') as sprites:
@@ -490,9 +505,15 @@ def prepare_import(game,project,progress=lambda *a:None,cancel=None):
      fr=frames[index];bank=fr['art_bank'];meta=fr['images'][int(layer)]
      if bank not in ART_FILES or meta['offset']<0:raise ValueError('This frame has no supported art slot.')
      before=colorize(decode_image(meta,banks[bank]),palette);fitted,fit=fit_image(png,before)
-     payload,after,stats=encode_replacement(meta,banks[bank],palette,fitted)
+     payload,after,stats=encode_replacement(meta,banks[bank],palette,fitted,unrestricted=True)
+     actual=np.array(after).astype(np.int16);requested=fitted.astype(np.int16)
+     # Ignore invisible RGB, but expose real palette differences instead of
+     # describing an approximate PNG as an exact import.
+     visible=requested[:,:,3]>0;difference=np.max(np.abs(actual-requested),axis=2)
+     stats['input_color_difference_pixels']=int(np.sum((difference>1)&visible))
+     stats['input_color_max_difference']=int(difference[visible].max()) if visible.any() else 0
      if stats['changed_pixels']==0:plan['skipped'].append(dict(path=relative,reason='no rendered change after palette fitting'));continue
-     start=meta['offset'];end=start+len(payload);references=[]
+     start=meta['offset'];end=start+sum(meta['sizes']);references=[]
      for j,other in enumerate(frames):
       if other['art_bank']!=bank:continue
       for k,m in other['images'].items():
@@ -512,6 +533,7 @@ def prepare_import(game,project,progress=lambda *a:None,cancel=None):
      payloads[key]=payload;stem=f'{position:05d}';(prepared/f'{stem}.payload').write_bytes(payload)
      before.save(prepared/f'{stem}-before.png');after.save(prepared/f'{stem}-after.png');Image.fromarray(fitted).save(prepared/f'{stem}-fitted.png')
      warnings=[]
+     if stats['input_color_difference_pixels']:warnings.append(f'{stats["input_color_difference_pixels"]} pixels differ from the supplied PNG (maximum channel difference {stats["input_color_max_difference"]}/255); check palette availability and tile coverage')
      if stats.get('material_color_changes'):warnings.append(f'Original-material fallback altered {stats["material_color_changes"]} pixels after closest-color fitting could not fit')
      if stats.get('brightness_color_tolerance'):warnings.append(f'Nearby shading optimized: {stats["shading_adjusted_pixels"]} pixels; maximum decoded RGB difference {stats["shading_max_error"]}/255 from normal fitting')
      if stats.get('brightness_color_tolerance',0)>=16:warnings.append('Stronger shading fitting: inspect for visible color bands')
@@ -524,7 +546,7 @@ def prepare_import(game,project,progress=lambda *a:None,cancel=None):
      if stats['brightness_levels']<32:warnings.append(f'Colors fitted to {stats["brightness_levels"]} brightness levels')
      if stats['clipped_pixels']:warnings.append(f'{stats["clipped_pixels"]} opaque pixels outside original tiles were clipped')
      if len(references)>1:warnings.append(f'Shared art: also affects {len(references)-1} other frame/layer references')
-     record=dict(path=relative,character=name,frame=index,layer=layer,art_bank=bank,meta=meta,archive=archive_name,offset=absolute,bytes=len(payload),payload=f'{stem}.payload',payload_sha256=hashlib.sha256(payload).hexdigest(),before=f'{stem}-before.png',after=f'{stem}-after.png',fitted=f'{stem}-fitted.png',fit=fit,statistics=stats,warnings=warnings,affected_references=references)
+     record=dict(path=relative,character=name,frame=index,layer=layer,art_bank=bank,meta=meta,encoded_sizes=stats['encoded_sizes'],encoded_flags=stats['encoded_flags'],archive=archive_name,offset=absolute,bytes=len(payload),payload=f'{stem}.payload',payload_sha256=hashlib.sha256(payload).hexdigest(),before=f'{stem}-before.png',after=f'{stem}-after.png',fitted=f'{stem}-fitted.png',fit=fit,statistics=stats,warnings=warnings,affected_references=references)
      plan['patches'].append(record);plan['input_hashes'][relative]=sha(path)
      if archive_name not in plan['source_hashes']:plan['source_hashes'][archive_name]=sha(source/archive_name)
     except Cancelled:raise
@@ -532,8 +554,9 @@ def prepare_import(game,project,progress=lambda *a:None,cancel=None):
    # No conflicting overlapping writes, including different characters.
    ordered=sorted(plan['patches'],key=lambda p:(p['archive'],p['offset']))
    for a,b in zip(ordered,ordered[1:]):
-    if a['archive']==b['archive'] and a['offset']+a['bytes']>b['offset']:raise ValueError('Prepared writes overlap. No import can be applied.')
+    if a['archive']==b['archive'] and a['offset']+sum(a['meta']['sizes'])>b['offset']:raise ValueError('Prepared writes overlap. No import can be applied.')
    plan['source_hashes']={name:digest for name,digest in plan['source_hashes'].items() if any(r['archive']==name for r in plan['patches'])}
+   if plan['patches']:plan['source_hashes']['characters-foits.gfs']=plan['protected_hashes'].pop('characters-foits.gfs')
   progress(len(found),len(found),f'Prepared {len(plan["patches"])} replacements')
  except Cancelled:plan['status']='cancelled';plan['patches']=[]
  except Exception:
@@ -560,6 +583,10 @@ def game_running():
 def validate_prepared(prepared,check_running=False):
  prepared=Path(prepared).resolve();plan=json.loads((prepared/'plan.json').read_text(encoding='utf-8'))
  if plan.get('status')!='prepared' or not plan['patches']:raise ValueError('There are no prepared replacements to apply.')
+ if plan.get('storage') not in [None,'relocatable']:raise ValueError('Unsupported import storage mode.')
+ if plan.get('storage')=='relocatable':
+  archives={r['archive'] for r in plan['patches']}|{'characters-foits.gfs'}
+  if set(plan['source_hashes'])!=archives or set(plan['protected_hashes'])!={'sprites.gfs'}:raise ValueError('Incomplete archive baseline in import plan.')
  if check_running and game_running():raise ValueError('Close Skullgirls before applying an import.')
  source=data_folder(plan['game']);project,manifest=project_info(plan['project'])
  if not prepared.is_relative_to(project/'Prepared'):raise ValueError('The preparation is outside this project.')
@@ -577,14 +604,19 @@ def validate_prepared(prepared,check_running=False):
    if name not in frames:frames[name]=parse_frames_data(name,foit.read(f'characters/{name}.foit'),art.entries[f'characters/{name}.art'][1])
    frame=frames[name][record['frame']];meta=frame['images'][record['layer']];expected=json.loads(json.dumps(meta))
    g=art if bank==5 else pt;absolute=g.entries[f'characters/{name}{suffix}'][0]+meta['offset']
-   if frame['art_bank']!=bank or expected!=record['meta'] or absolute!=record['offset'] or sum(meta['sizes'])!=record['bytes']:raise ValueError('The art slot no longer matches the prepared import.')
+   relocating=plan.get('storage')=='relocatable';sizes=record.get('encoded_sizes') if relocating else meta['sizes']
+   flags=record.get('encoded_flags') if relocating else meta['flags']
+   if flags!=(meta['flags']&~64 if relocating else meta['flags']):raise ValueError('Invalid art storage flags.')
+   if not isinstance(sizes,(list,tuple)) or len(sizes)!=3 or any(type(s)!=int or s<=0 for s in sizes) or sizes[0]!=meta['sizes'][0]:raise ValueError('Invalid encoded channel sizes.')
+   if frame['art_bank']!=bank or expected!=record['meta'] or absolute!=record['offset'] or sum(sizes)!=record['bytes']:raise ValueError('The art slot no longer matches the prepared import.')
    payload=safe_path(prepared,record['payload']).read_bytes()
    if len(payload)!=record['bytes'] or hashlib.sha256(payload).hexdigest()!=record['payload_sha256']:raise ValueError('A prepared payload was altered.')
    if payload[:meta['sizes'][0]]!=g.data[absolute:absolute+meta['sizes'][0]]:raise ValueError('Import would alter lighting normals.')
-   decode_image({**meta,'offset':0},payload)
+   decode_image({**meta,'offset':0,'sizes':sizes,'flags':flags},payload)
   ordered=sorted(plan['patches'],key=lambda r:(r['archive'],r['offset']))
   for a,b in zip(ordered,ordered[1:]):
-   if a['archive']==b['archive'] and a['offset']+a['bytes']>b['offset']:raise ValueError('Prepared art writes overlap.')
+   length=sum(a['meta']['sizes']) if plan.get('storage')=='relocatable' else a['bytes']
+   if a['archive']==b['archive'] and a['offset']+length>b['offset']:raise ValueError('Prepared art writes overlap.')
  return prepared,plan,source,project,manifest
 
 
@@ -600,7 +632,11 @@ def export_mod_zips(prepared,parent,progress=lambda *a:None,cancel=None):
   staging=Path(staging);result=[]
   for index,(name,records) in enumerate(sorted(groups.items())):
    stopped(cancel);progress(index,len(groups),f'Building {NAMES[name]} mod ZIP…');assets={};identity=hashlib.sha256(name.encode())
-   for archive_name in sorted({r['archive'] for r in records}):
+   if plan.get('storage')=='relocatable':
+    from repacking import character_assets
+    assets=character_assets(source,prepared,name,records)
+    for path,content in assets.items():identity.update(path.encode());identity.update(content)
+   for archive_name in ([] if plan.get('storage')=='relocatable' else sorted({r['archive'] for r in records})):
     stopped(cancel)
     with GFS(source/archive_name) as archive:
      bank=next(bank for bank,(filename,_) in ART_FILES.items() if filename==archive_name);suffix=ART_FILES[bank][1]
@@ -636,6 +672,9 @@ def export_mod_zips(prepared,parent,progress=lambda *a:None,cancel=None):
 
 def apply_import(prepared,progress=lambda *a:None,check_running=True):
  prepared,plan,source,project,manifest=validate_prepared(prepared,check_running)
+ if plan.get('storage')=='relocatable':
+  from repacking import apply_relocated
+  return apply_relocated(prepared,plan,source,project,progress,check_running)
  backup=unique(project/'Backups','Import');receipt=dict(schema=SCHEMA,game=str(source),before=plan['source_hashes'],after={},frames=len(plan['patches']),protected=plan['protected_hashes'],status='backing_up')
  write_json(backup/'restore.json',receipt)
  for i,(name,digest) in enumerate(plan['source_hashes'].items()):
@@ -685,7 +724,7 @@ def restore_import(backup,progress=lambda *a:None,check_running=True):
  for name,digest in receipt['protected'].items():
   if name not in ['characters-foits.gfs','sprites.gfs'] or sha(source/name)!=digest:raise ValueError('Game metadata or palettes changed since this import. Restore refused.')
  for name,digest in receipt['after'].items():
-  if name not in ['characters-art.gfs','characters-art-pt.gfs']:raise ValueError('Invalid backup archive.')
+  if name not in ['characters-art.gfs','characters-art-pt.gfs','characters-foits.gfs']:raise ValueError('Invalid backup archive.')
   allowed={digest}
   if receipt['status']=='restoring':allowed.add(receipt['before'][name])
   if sha(source/name) not in allowed:raise ValueError('The game has changed since this import. Restore refused to avoid overwriting newer changes.')
@@ -705,5 +744,8 @@ def restore_import(backup,progress=lambda *a:None,check_running=True):
    temporary.replace(source/name)
   finally:
    if temporary is not None:temporary.unlink(missing_ok=True)
+ if receipt.get('storage')=='relocatable':
+  from repacking import refresh_project_metadata
+  refresh_project_metadata(backup.parent.parent,source,receipt['characters'])
  receipt['status']='restored';write_json(backup/'restore.json',receipt);progress(1,1,'Original art restored')
  return backup,receipt

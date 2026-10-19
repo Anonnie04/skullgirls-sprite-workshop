@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.9 — 2026-10-19
+
+- Remove fixed compressed-slot limits from new imports by relocating replacement streams and updating only their art pointers, channel lengths, and brightness encoding flags.
+- Stop storage-driven color, material, and shading approximations; support translucent palette materials during preparation.
+- Include matching character metadata with exported mod ZIPs, and back up and restore all affected archives together.
+- Verify exact-color oversized translucent replacements, untouched assets, rollback, restore, and legacy archive compatibility.
+
 ## 0.2.8 — 2026-10-19
 
 - Add Save mod ZIPs beside Apply to export one verified mod-manager ZIP per character with ready replacements, without modifying the game.

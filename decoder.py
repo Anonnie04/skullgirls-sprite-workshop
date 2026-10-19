@@ -21,7 +21,9 @@ def cmpimg(r,legacy=False):
  assert flags&32
  # Pre-VRSN depots omit the art pointer and channel sizes for empty images.
  if legacy and not n:
+  if hasattr(r,'image_positions'):r.image_positions.append(None)
   return dict(n=n,w=w,h=h,used=used,flags=flags,mask=mask.hex(),offset=-1,sizes=(0,0,0))
+ if hasattr(r,'image_positions'):r.image_positions.append(r.pos)
  offset=r.num('i');sizes=struct.unpack('<3i',r.read(12))
  return dict(n=n,w=w,h=h,used=used,flags=flags,mask=mask.hex(),offset=offset,sizes=sizes)
 
@@ -34,7 +36,7 @@ def frame(r,legacy=False):
  for _ in range(3):r.read(r.num('H')*16)
  return dict(origin=origin,art_bank=art_bank,images=images,offsets=offsets)
 
-def parse_frames_data(name,b,art_size):
+def parse_frames_data(name,b,art_size,with_locations=False):
  legacy=b[4:8]!=b'VRSN'
  if not legacy:
   assert struct.unpack_from('<I',b,8)[0] in (3,9), 'Unsupported FOIT version'
@@ -52,8 +54,9 @@ def parse_frames_data(name,b,art_size):
   count=struct.unpack_from('<I',b,start-4)[0]
   if not 1<=count<20000:continue
   try:
-   r=Reader(b,start);frames=[frame(r,legacy) for _ in range(count)]
-   return frames
+   r=Reader(b,start);r.image_positions=[];frames=[frame(r,legacy) for _ in range(count)]
+   locations=dict(zip(((j,k) for j,f in enumerate(frames) for k in f['images']),r.image_positions))
+   return (frames,locations) if with_locations else frames
   except (AssertionError,struct.error):pass
  raise ValueError(f'No valid frame section for {name}')
 

@@ -199,7 +199,7 @@ class App(tk.Tk):
   game=self.game.get();project=self.project.get();self.prepared=None;self.plan=None;self.status.set('Checking replacements…');self.launch('prepare',lambda:prepare_import(game,project,self.report,self.cancel_event))
  def start_apply(self):
   if self.busy or not self.plan or not self.prepared:return
-  n=len(self.plan['patches']);warnings=sum(bool(p['warnings']) for p in self.plan['patches']);errors=len(self.plan['errors']);text=f'Apply {n} prepared replacements?\n\n{warnings} have fitting notes; {errors} files will be skipped. Review previews first.\n\nClose Skullgirls. Art archives will be backed up. Metadata, palettes, timing and hitboxes remain unchanged.'
+  n=len(self.plan['patches']);warnings=sum(bool(p['warnings']) for p in self.plan['patches']);errors=len(self.plan['errors']);text=f'Apply {n} prepared replacements?\n\n{warnings} have fitting notes; {errors} files will be skipped. Review previews first.\n\nClose Skullgirls. Affected archives will be backed up. Art storage pointers and lengths may change; palettes, timing and hitboxes stay intact.'
   if messagebox.askokcancel('Apply reviewed replacements',text):
    prepared=self.prepared;self.launch('apply',lambda:apply_import(prepared,self.report),False)
  def start_mod_export(self):
@@ -233,7 +233,7 @@ class App(tk.Tk):
     for x in range(0,440,16):
      if (x//16+y//16)%2:draw.rectangle((x,y,x+15,y+15),fill=(43,51,63,255))
    canvas.alpha_composite(im,((440-im.width)//2,(120-im.height)//2));photo=ImageTk.PhotoImage(canvas.convert('RGB'));self.photos.append(photo);label.configure(image=photo,width=440,height=120)
-  notes='; '.join(r['warnings']) or 'Original compression space preserved.';self.details.set(f'{NAMES[r["character"]]} · internal frame {r["frame"]} · {r["statistics"]["changed_pixels"]:,} changed pixels · {r["fit"]["mode"]}. {notes}')
+  notes='; '.join(r['warnings']) or 'No storage-driven color changes.';self.details.set(f'{NAMES[r["character"]]} · internal frame {r["frame"]} · {r["statistics"]["changed_pixels"]:,} changed pixels · {r["fit"]["mode"]}. {notes}')
  def stop(self):self.cancel_event.set();self.status.set('Stopping after the current frame…');self.stop_button.state(['disabled'])
  def open_preview(self,event=None):
   selection=self.table.selection()
@@ -266,7 +266,7 @@ class App(tk.Tk):
      target,result=payload;self.finish();self.project.set(str(target));self.check_input();self.status.set(f'Animation staged: {result["copied"]} PNGs; {result["backed_up"]} previous Input frames backed up; {result["unchanged"]} unchanged. Prepare previews next.');self.progress['value']=100
     elif event=='prepare':
      self.prepared,self.plan=payload;self.finish();self.table.delete(*self.table.get_children())
-     for i,r in enumerate(self.plan['patches']):self.table.insert('',tk.END,iid=f'patch{i}',values=(r['path'],'Ready · '+('; '.join(r['warnings']) or 'fits original art slot')))
+     for i,r in enumerate(self.plan['patches']):self.table.insert('',tk.END,iid=f'patch{i}',values=(r['path'],'Ready · '+('; '.join(r['warnings']) or 'no storage-driven color changes')))
      for i,r in enumerate(self.plan['errors']):self.table.insert('',tk.END,iid=f'error{i}',values=(r['path'],'Skipped: '+r['error']))
      for i,r in enumerate(self.plan['skipped']):self.table.insert('',tk.END,iid=f'skip{i}',values=(r['path'],'Skipped: '+r['reason']))
      n=len(self.plan['patches']);self.apply_button.state(['!disabled'] if n and self.plan['status']=='prepared' else ['disabled']);self.status.set(f'{n} prepared; {len(self.plan["errors"])} errors; {len(self.plan["skipped"])} unchanged/duplicate files skipped.');self.progress['value']=100

@@ -10,9 +10,9 @@
 
 Game colors are palette material indices plus brightness and outline values. A PNG is converted to the installed default palette with neutral lighting. Matching that palette closely reduces approximation. Large edits, scattered colors, and fine texture can need more compressed bytes than the original slot.
 
-Fitting may reduce brightness choices, preserve tiny existing color differences, consolidate equivalent materials, or adjust nearby shading values. Notes report the measured shading difference from ordinary palette fitting. Higher tolerances may produce banding. Material substitutions can render differently in alternate costumes, so inspect the palettes you intend to use.
+Preparation keeps all brightness choices and supports translucent palette materials. It does not consolidate materials, quantize shades, or approximate whites to fit the old byte budget. Streams can grow and their storage references are updated. Exact colors available in the installed palette are preferred; colors absent from it still require the closest representable sample.
 
-The importer keeps the original lighting normals and frame metadata. It does not enlarge tile masks or compressed slots, change hitboxes or timing, or add animation frames. Whole-frame fitting may scale and align a different-sized PNG, and pixels outside original tiles can be clipped; preview notes report this.
+The importer keeps the original lighting normals, tile masks, hitboxes and timing. Only art pointers, compressed channel lengths, and brightness encoding flags change in frame metadata. It does not add animation frames. Whole-frame fitting may scale and align a different-sized PNG, and pixels outside original tiles can be clipped; preview notes report this.
 
 Fully transparent replacements are supported. For shared art, editing one stored image can affect several frame references. Conflicting replacements for the same slot are refused.
 
@@ -24,4 +24,4 @@ To fix one frame, select only that PNG and choose its destination frame. Enable 
 
 If your editor exports directly inside Input, staging registers those original export filenames so unchanged source copies do not cause path errors. If you edit them again, import the sequence again to refresh the mapped replacements.
 
-The importer first tries the closest available palette colors, keeping unchanged pixels intact and using lossless storage optimizations. Original materials win only equal-distance ties. Visible shading adjustments and stronger material preferences are attempted only after this pass fails to fit; preview notes identify stronger original-material substitutions.
+The importer uses the closest available palette colors and keeps unchanged pixels intact. Original materials win equal-distance ties. Review the resulting preview with the palettes you intend to use; the same rendered color can have more than one material representation.

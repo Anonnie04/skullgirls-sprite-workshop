@@ -16,7 +16,7 @@ You supply your installed game or an older depot. Game archives, sprites, and th
 
 Matching supports projects with different character selections. Removed Output character folders and missing PNGs are skipped and recorded in the match report; later characters continue matching. Incomplete layered frames are skipped as a whole.
 
-After preparing and reviewing replacements, **Save mod ZIPs…** beside Apply exports one ZIP per character with ready changes. Import these ZIPs into Skullgirls Mod Manager. The ZIPs contain patched character art assets and `mod.json`; exporting leaves the game and Input files unchanged. Use the same game version used for preparation. Mods that replace the same character art asset can override each other according to manager load order.
+After preparing and reviewing replacements, **Save mod ZIPs…** beside Apply exports one ZIP per character with ready changes. Import these ZIPs into Skullgirls Mod Manager. The ZIPs contain patched character art, matching character metadata, and `mod.json`; exporting leaves the game and Input files unchanged. Keep each ZIP's art and metadata together and use the same game version used for preparation. Mods that replace the same character can override each other according to manager load order.
 
 ```text
 Skullgirls Project .../
@@ -30,7 +30,7 @@ Skullgirls Project .../
 
 **Generate full empty Input tree** builds the complete replacement folder layout without extracting every animation. Digital Art Compendium references provide animation names when available; otherwise exports use internal frame numbers. Frames without reliable Compendium matches remain importable in unmapped folders.
 
-Imports preserve frame metadata, animation timing, origins, hitboxes, tile masks, palettes, archive lengths, and lighting normals. Artwork must fit the original tile coverage and compressed storage slots. Some frames need color or shading approximation, and stronger fitting can produce visible bands. Preview notes identify these changes. Material substitutions can look different with alternate palettes. Future game updates can require a new export or decoder changes.
+Imports preserve animation timing, origins, hitboxes, tile masks, palettes, and lighting normals. Replacement streams can grow: the Workshop rebuilds affected archives and updates only art storage pointers, channel lengths, and brightness encoding flags in character metadata. It does not reduce colors, consolidate materials, or adjust shading to meet the old compressed byte budget. Translucent palette materials are supported. Artwork still uses the installed game's palette and tile coverage, so colors absent from that palette cannot always be reproduced exactly. Review the prepared preview before applying. Future game updates can require a new export or decoder changes.
 
 Current FOIT v9, older v3, and legacy archives without version headers are supported, including older `temp` archive paths. Characters without a default palette in the selected game version are excluded from the character list. Native CPU compression is used when available; GPU acceleration is not required. The first native compilation in an app session takes additional time.
 
