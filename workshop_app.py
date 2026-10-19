@@ -7,7 +7,7 @@ from tkinter import ttk,filedialog,messagebox
 from PIL import Image,ImageTk,ImageDraw
 from decoder import NAMES,available_characters
 from project_match import match_projects,copy_matches
-from workshop import generate_input_tree,export_project,scan_input,prepare_import,apply_import,restore_import,project_info
+from workshop import generate_input_tree,export_project,scan_input,prepare_import,apply_import,restore_import,project_info,export_mod_zips
 
 # Original art-deco styling: no game artwork or external fonts required.
 BG='#181416';PANEL='#292124';TEXT='#f5ead5';MUTED='#c2b39e';ACCENT='#e6bc68'
@@ -92,6 +92,7 @@ class App(tk.Tk):
   imports.columnconfigure(1,weight=1);imports.rowconfigure(3,weight=1);self.path_row(imports,0,'PROJECT FOLDER',self.project)
   tk.Label(imports,text='Place only edited PNGs in Input, using the same paths as Output. Empty folders are skipped.\nPrepare and review the previews before applying. The game must be closed when applying or restoring.',bg=BG,fg=MUTED,justify='left',wraplength=920).grid(row=1,column=0,columnspan=3,sticky='ew',pady=10)
   actions=tk.Frame(imports,bg=BG);actions.grid(row=2,column=0,columnspan=3,sticky='ew',pady=(0,8));self.sequence_button=ttk.Button(actions,text='Import animation sequence…',command=self.start_sequence);self.sequence_button.pack(side='left',padx=(0,8));self.scan_button=ttk.Button(actions,text='Check Input',command=self.check_input);self.scan_button.pack(side='left');self.prepare_button=ttk.Button(actions,text='Prepare previews',command=self.start_prepare);self.prepare_button.pack(side='left',padx=8);self.apply_button=ttk.Button(actions,text='Apply ready replacements',style='Accent.TButton',command=self.start_apply,state='disabled');self.apply_button.pack(side='right')
+  self.mod_button=ttk.Button(actions,text='Save mod ZIPs…',command=self.start_mod_export,state='disabled');self.mod_button.pack(side='right',padx=8)
   tableframe=tk.Frame(imports,bg=BG);tableframe.grid(row=3,column=0,columnspan=3,sticky='nsew');tableframe.columnconfigure(0,weight=1);tableframe.rowconfigure(0,weight=1);self.table=ttk.Treeview(tableframe,columns=('path','result'),show='headings',height=3);self.table.heading('path',text='Input file');self.table.heading('result',text='Result');self.table.column('path',width=500);self.table.column('result',width=360);self.table.grid(row=0,column=0,sticky='nsew');scroll=ttk.Scrollbar(tableframe,orient='vertical',command=self.table.yview);scroll.grid(row=0,column=1,sticky='ns');self.table.configure(yscrollcommand=scroll.set);self.table.bind('<<TreeviewSelect>>',self.preview_selection);self.table.bind('<Double-1>',self.open_preview)
   previews=tk.Frame(imports,bg=BG);previews.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(10,4));self.preview_labels=[]
   for col,title in enumerate(['Current game frame','Prepared replacement']):
@@ -137,7 +138,7 @@ class App(tk.Tk):
  def path_row(self,parent,row,label,var):
   tk.Label(parent,text=label,bg=BG,fg=MUTED,font=('Segoe UI',9,'bold')).grid(row=row,column=0,sticky='w',padx=(0,12),pady=5);entry=ttk.Entry(parent,textvariable=var);entry.grid(row=row,column=1,sticky='ew',pady=5);button=ttk.Button(parent,text='Browse…',command=lambda:self.browse(var));button.grid(row=row,column=2,padx=(10,0),pady=5);self.fields.extend([entry,button])
  def invalidate(self,*args):
-  if not self.busy:self.prepared=None;self.plan=None;self.apply_button.state(['disabled'])
+  if not self.busy:self.prepared=None;self.plan=None;self.apply_button.state(['disabled']);self.mod_button.state(['disabled'])
  def browse(self,var):
   if self.busy:return
   p=filedialog.askdirectory(initialdir=var.get() if Path(var.get()).is_dir() else str(Path.home()))
@@ -160,6 +161,7 @@ class App(tk.Tk):
  def launch(self,kind,work,cancellable=True):
   if self.busy:return
   self.busy=True;self.kind=kind;self.cancel_event.clear();self.progress['value']=0;self.count.set('');self.apply_button.state(['disabled']);self.copy_button.state(['disabled'])
+  self.mod_button.state(['disabled'])
   for c in self.controls:c.state(['disabled'])
   self.stop_button.state(['!disabled'] if cancellable else ['disabled'])
   def run():
@@ -200,6 +202,12 @@ class App(tk.Tk):
   n=len(self.plan['patches']);warnings=sum(bool(p['warnings']) for p in self.plan['patches']);errors=len(self.plan['errors']);text=f'Apply {n} prepared replacements?\n\n{warnings} have fitting notes; {errors} files will be skipped. Review previews first.\n\nClose Skullgirls. Art archives will be backed up. Metadata, palettes, timing and hitboxes remain unchanged.'
   if messagebox.askokcancel('Apply reviewed replacements',text):
    prepared=self.prepared;self.launch('apply',lambda:apply_import(prepared,self.report),False)
+ def start_mod_export(self):
+  if self.busy or not self.plan or not self.prepared:return
+  parent=filedialog.askdirectory(initialdir=str(Path(self.project.get()).parent),title='Save one mod ZIP per applicable character')
+  if not parent:return
+  prepared=self.prepared;self.status.set('Building character mod ZIPs without modifying the game…')
+  self.launch('mods',lambda:export_mod_zips(prepared,parent,self.report,self.cancel_event))
  def start_restore(self):
   if self.busy:return
   initial=str(self.last_backup or (Path(self.project.get())/'Backups'));folder=filedialog.askdirectory(initialdir=initial if Path(initial).is_dir() else str(Path.home()),title='Choose a backup containing restore.json')
@@ -248,9 +256,12 @@ class App(tk.Tk):
      for group,label in [('matches','Ready to copy'),('review','Review required'),('unmatched','Unmatched')]:
       for r in self.match_report[group]:
        targets=', '.join(c['target'] for c in r.get('copies',[]));self.match_table.insert('',tk.END,values=(f'{r["character"]} {r["source_frame"]}',targets or str(r.get('target_frame','')),('Identical pixels — no copy needed' if group=='matches' and all(c['identical_pixels'] for c in r['copies']) else label)+(' — '+r['reason'] if 'reason' in r else '')))
-     self.copy_button.state(['!disabled'] if self.match_report['matches'] else ['disabled']);self.status.set(f'{ready_pngs:,} PNGs ready to copy; {identical_pngs:,} identical PNGs skipped; {len(self.match_report["review"]):,} uncertain frames. Nothing copied yet. Click Copy ready PNGs to target Input.');self.progress['value']=100
+     missing=len(self.match_report.get('missing_exports',[]))
+     self.copy_button.state(['!disabled'] if self.match_report['matches'] else ['disabled']);self.status.set(f'{ready_pngs:,} PNGs ready to copy; {identical_pngs:,} identical PNGs skipped; {len(self.match_report["review"]):,} uncertain frames; {missing:,} frames skipped for missing Output PNGs. Nothing copied yet. Click Copy ready PNGs to target Input.');self.progress['value']=100
     elif event=='copy':
      target,result=payload;self.finish();self.project.set(str(target));self.tabs.select(1);self.status.set(f'Copied {len(result["copied"]):,} PNGs to target Input; {len(result["existing"]):,} existing edits preserved; {len(result.get("replaced_references",[])):,} unchanged references replaced; {result["unchanged"]:,} identical PNGs skipped. Prepare previews next.');self.progress['value']=100
+    elif event=='mods':
+     folder,records=payload;self.finish();self.apply_button.state(['!disabled']);self.status.set(f'Saved {len(records)} character mod ZIPs to {folder}. Import the ZIPs into Skullgirls Mod Manager.');self.progress['value']=100
     elif event=='sequence':
      target,result=payload;self.finish();self.project.set(str(target));self.check_input();self.status.set(f'Animation staged: {result["copied"]} PNGs; {result["backed_up"]} previous Input frames backed up; {result["unchanged"]} unchanged. Prepare previews next.');self.progress['value']=100
     elif event=='prepare':
@@ -260,8 +271,8 @@ class App(tk.Tk):
      for i,r in enumerate(self.plan['skipped']):self.table.insert('',tk.END,iid=f'skip{i}',values=(r['path'],'Skipped: '+r['reason']))
      n=len(self.plan['patches']);self.apply_button.state(['!disabled'] if n and self.plan['status']=='prepared' else ['disabled']);self.status.set(f'{n} prepared; {len(self.plan["errors"])} errors; {len(self.plan["skipped"])} unchanged/duplicate files skipped.');self.progress['value']=100
      if n:self.table.selection_set('patch0');self.preview_selection()
-    elif event=='apply':self.last_backup,r=payload;self.finish();self.prepared=None;self.plan=None;self.status.set(f'Installed {r["frames"]} replacements. Verified backup: {self.last_backup.name}');self.progress['value']=100
-    elif event=='restore':self.finish();self.prepared=None;self.plan=None;self.status.set('Original art restored and verified.');self.progress['value']=100
+    elif event=='apply':self.last_backup,r=payload;self.finish();self.prepared=None;self.plan=None;self.mod_button.state(['disabled']);self.status.set(f'Installed {r["frames"]} replacements. Verified backup: {self.last_backup.name}');self.progress['value']=100
+    elif event=='restore':self.finish();self.prepared=None;self.plan=None;self.mod_button.state(['disabled']);self.status.set('Original art restored and verified.');self.progress['value']=100
     elif event=='error':
      self.finish();self.status.set('Operation stopped.')
      if self.plan and self.plan['status']=='prepared' and self.plan['patches']:self.apply_button.state(['!disabled'])
@@ -272,6 +283,8 @@ class App(tk.Tk):
   self.busy=False
   for c in self.controls:c.state(['!disabled'])
   self.stop_button.state(['disabled']);self.refresh_copy_button()
+  ready=bool(self.prepared and self.plan and self.plan.get('status')=='prepared' and self.plan.get('patches'))
+  self.mod_button.state(['!disabled'] if ready else ['disabled'])
  def open_output(self):
   if self.last_output:os.startfile(str(self.last_output))
  def open_branch(self,branch):

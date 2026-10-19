@@ -16,6 +16,20 @@ def frame_groups(manifest):
 def primary(entries):
  return next((pair for pair in entries if 'layers' not in Path(pair[0]).parts),entries[0])
 
+def present_frames(project,groups,side,report,cancel):
+ result={}
+ for name,frames in groups.items():
+  available=[]
+  for index,entries in frames:
+   stopped(cancel)
+   missing=[route for route,_ in entries if not safe_path(project/'Output',route).is_file()]
+   if missing:
+    report['missing_exports'].append(dict(project=side,character=name,frame=index,paths=missing))
+    if side=='source':report['unmatched'].append(dict(character=name,source_frame=index,reason='Source Output PNGs are missing; frame skipped'))
+   else:available.append((index,entries))
+  if available:result[name]=available
+ return result
+
 def vectors(project,frames,progress,cancel):
  result=[]
  for i,(_,entries) in enumerate(frames):
@@ -59,12 +73,14 @@ def match_projects(source,target,progress=lambda *a:None,cancel=None,report_pare
  source,sm=project_info(source);target,tm=project_info(target)
  if source==target:raise ValueError('Choose two different exported projects.')
  if not sm['exports'] or not tm['exports']:raise ValueError('Both projects must contain exported Output PNGs. Empty folder trees cannot be matched.')
- report=dict(source=str(source),target=str(target),matches=[],review=[],unmatched=[],status='matching',source_manifest_sha256=sha(source/'project.json'),target_manifest_sha256=sha(target/'project.json'))
- sg=frame_groups(sm);tg=frame_groups(tm)
+ report=dict(source=str(source),target=str(target),matches=[],review=[],unmatched=[],missing_exports=[],status='matching',source_manifest_sha256=sha(source/'project.json'),target_manifest_sha256=sha(target/'project.json'))
+ progress(0,0,'Checking exported PNGs before matching…')
+ sg=present_frames(source,frame_groups(sm),'source',report,cancel)
+ tg=present_frames(target,frame_groups(tm),'target',report,cancel)
  for name,old in sg.items():
   stopped(cancel)
   if name not in tg:
-   report['unmatched'].extend(dict(character=name,source_frame=i,reason='Character absent from target') for i,_ in old);continue
+   report['unmatched'].extend(dict(character=name,source_frame=i,reason='No available exported frames for this character in target') for i,_ in old);continue
   new=tg[name];left=vectors(source,old,progress,cancel);right=vectors(target,new,progress,cancel);progress(0,0,f'Aligning {name} frame order')
   pairs,distances=align_sequences(left,right,cancel);paired=set()
   for i,j,distance in pairs:

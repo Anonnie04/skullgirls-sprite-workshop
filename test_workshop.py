@@ -323,6 +323,43 @@ def run(report):
   edited[0,0]=[1,2,3,255];Image.fromarray(edited).save(match_source/'Output'/source_route)
   expect_error(lambda:copy_matches(match_folder),'PNG changed')
   passed.append('project alignment handles inserted frames; copies preserve originals and existing edits; stale matching refused')
+  # Missing middle characters must not stop later characters or renumber frames.
+  sparse_source=root/'SparseSource';sparse_target=root/'SparseTarget'
+  shutil.copytree(match_source,sparse_source);shutil.copytree(match_target,sparse_target)
+  for location,extra_names in [(sparse_source,['double','filia']),(sparse_target,['double','eliza','filia'])]:
+   saved=json.loads((location/'project.json').read_text());base=list(saved['exports'].items())
+   for name in extra_names:
+    for route,entry in base:
+     renamed=route.replace('annie',name);saved['exports'][renamed]={**entry,'character':name}
+     target_png=safe_path(location/'Output',renamed);target_png.parent.mkdir(parents=True,exist_ok=True)
+     shutil.copy2(location/'Output'/route,target_png)
+   write_json(location/'project.json',saved)
+  shutil.rmtree(sparse_source/'Output'/'double')
+  source_missing=next(r for r,e in ms['exports'].items() if e['frame']==1)
+  (sparse_source/'Output'/source_missing).unlink()
+  target_missing=next(r for r,e in mt['exports'].items() if e['frame']==2).replace('annie','filia')
+  (sparse_target/'Output'/target_missing).unlink()
+  sparse_folder,sparse=match_projects(sparse_source,sparse_target)
+  assert sparse['status']=='matched' and len(sparse['missing_exports'])==5
+  paired=sparse['matches']+sparse['review']
+  assert {r['character'] for r in paired}=={'annie','filia'} and len(paired)==4
+  assert {r['source_frame'] for r in paired if r['character']=='annie'}=={0,2}
+  assert {r['target_frame'] for r in paired if r['character']=='filia'}=={0,1}
+  _,sparse_sm=project_info(sparse_source);_,sparse_tm=project_info(sparse_target)
+  for record in paired:
+   for item in record['copies']:
+    assert (sparse_source/'Output'/item['source']).is_file() and (sparse_target/'Output'/item['target']).is_file()
+    assert sparse_sm['exports'][item['source']]['frame']==record['source_frame']
+    assert sparse_tm['exports'][item['target']]['frame']==record['target_frame']
+  copy_matches(sparse_folder)
+  # A surviving composite cannot conceal a missing editable layer.
+  from project_match import present_frames
+  partial=dict(unmatched=[],missing_exports=[])
+  groups={'annie':[(3,[(source_route,{'layer':None}),('missing/layers/frame.png',{'layer':1})])]}
+  assert present_frames(sparse_source,groups,'source',partial,None)=={}
+  assert partial['missing_exports'][0]['paths']==['missing/layers/frame.png']
+  assert partial['unmatched'][0]['source_frame']==3
+  passed.append('missing source/target PNGs and whole characters do not stop later matches; frame IDs and layer integrity preserved')
   # Drive the actual Tk buttons and their worker/event completion path.
   from workshop_app import App
   import workshop_app as ui,time
@@ -403,8 +440,25 @@ def run(report):
    image=Image.open(project/'Output'/rel).convert('RGBA');pixels=np.array(image);pixels[4:12,4:12]=[180,35,35,254];Image.fromarray(pixels).save(project/'Input'/rel)
   prepared,plan=prepare_import(game,project);assert len(plan['patches'])==2 and not plan['errors'],plan
   assert {p['art_bank'] for p in plan['patches']}=={4,5};passed.append('changed PNGs prepared for both art banks, including interpolated shading')
-  saved_input=(project/'Input'/route).read_bytes();(project/'Input'/route).write_bytes(saved_input+b'extra');expect_error(lambda:apply_import(prepared,check_running=False),'Input PNG changed');(project/'Input'/route).write_bytes(saved_input);passed.append('stale Input refused')
-  payload=prepared/plan['patches'][0]['payload'];saved=payload.read_bytes();payload.write_bytes(bytes([saved[0]^1])+saved[1:]);expect_error(lambda:apply_import(prepared,check_running=False),'payload was altered');payload.write_bytes(saved);passed.append('tampered prepared payload refused')
+  mod_folder,mods=export_mod_zips(prepared,root/'Mod ZIPs')
+  assert len(mods)==1 and mods[0]['character']=='annie'
+  import zipfile
+  with zipfile.ZipFile(mod_folder/mods[0]['file']) as archive:
+   info=json.loads(archive.read('mod.json'));assert info['id'].startswith('spriteworkshop.annie.') and info['version']=='1.0.0'
+   assert set(archive.namelist())=={'mod.json','characters-art.gfs/characters/annie.art','characters-art-pt.gfs/characters/annie.art-pt'}
+   for bank,(archive_name,suffix) in ART_FILES.items():
+    with GFS(game/'data01'/archive_name) as original_archive:
+     offset,size=original_archive.entries[f'characters/annie{suffix}'];expected=bytearray(original_archive.read(f'characters/annie{suffix}'))
+    for record in plan['patches']:
+     if record['art_bank']==bank:
+      start=record['offset']-offset;expected[start:start+record['bytes']]=(prepared/record['payload']).read_bytes()
+    assert archive.read(archive_name+'/characters/annie'+suffix)==expected
+  assert {p.name:sha(p) for p in (game/'data01').glob('*.gfs')}==original
+  assert json.loads((prepared/'plan.json').read_text())['status']=='prepared' and not (project/'Backups').exists()
+  expect_error(lambda:export_mod_zips(prepared,game/'bad'),'outside')
+  passed.append('character mod ZIP contains verified complete patched assets in manager layout; game and preparation unchanged')
+  saved_input=(project/'Input'/route).read_bytes();(project/'Input'/route).write_bytes(saved_input+b'extra');expect_error(lambda:apply_import(prepared,check_running=False),'Input PNG changed');expect_error(lambda:export_mod_zips(prepared,root/'Mod ZIPs'),'Input PNG changed');(project/'Input'/route).write_bytes(saved_input);passed.append('stale Input refused')
+  payload=prepared/plan['patches'][0]['payload'];saved=payload.read_bytes();payload.write_bytes(bytes([saved[0]^1])+saved[1:]);expect_error(lambda:apply_import(prepared,check_running=False),'payload was altered');expect_error(lambda:export_mod_zips(prepared,root/'Mod ZIPs'),'payload was altered');payload.write_bytes(saved);passed.append('tampered prepared payload refused')
   plan_file=prepared/'plan.json';saved_plan=plan_file.read_bytes();tampered=json.loads(saved_plan);tampered['patches'][0]['offset']+=1;write_json(plan_file,tampered);expect_error(lambda:apply_import(prepared,check_running=False),'art slot');plan_file.write_bytes(saved_plan);passed.append('tampered destination offset refused')
   protected=game/'data01'/'characters-foits.gfs';saved_metadata=protected.read_bytes();protected.write_bytes(saved_metadata[:-1]+b'X');expect_error(lambda:apply_import(prepared,check_running=False),'game files changed');protected.write_bytes(saved_metadata);passed.append('changed verified metadata refused')
   import workshop as engine
@@ -431,11 +485,73 @@ def run(report):
   cancel=threading.Event();cancel.set();_,cancelled_plan=prepare_import(game,project,cancel=cancel);assert cancelled_plan['status']=='cancelled' and not cancelled_plan['patches'];passed.append('cancelled preparation cannot apply')
   cancel=threading.Event();cancel.set();cancelled,m=export_project(game,root/'Projects',['annie'],cancel=cancel);assert m['status']=='cancelled';assert not list((cancelled/'Input').rglob('*.png'));passed.append('cancelled export leaves valid empty Input')
   review_regressions(root,passed)
+  mod_zip_regressions(root,passed)
   result=dict(status='passed',native_cpu_available=codec.native_optimal is not None,checks=passed,project=str(project),game_fixture=str(game))
  except Exception as exc:
   import traceback
   result=dict(status='failed',checks=passed,error=str(exc),traceback=traceback.format_exc(),test_root=str(root));write_json(report,result);raise
  write_json(report,result);print(json.dumps(result,indent=2),flush=True);return result
+
+def mod_zip_regressions(root,passed):
+ import zipfile,time
+ from unittest.mock import patch
+ import workshop_app as ui
+ game=fixture(root/'ModFixtures')
+ for path in (game/'data01').glob('*.gfs'):
+  with GFS(path) as archive:entries={k:archive.read(k) for k in archive.entries}
+  entries.update({k.replace('annie','filia'):v for k,v in list(entries.items())});make_gfs(path,entries)
+ project,manifest=export_project(game,root/'ModProjects',['annie','filia'],limit=3)
+ for route,entry in manifest['exports'].items():
+  if entry['frame'] not in [0,2]:continue
+  pixels=np.array(Image.open(project/'Output'/route).convert('RGBA'));pixels[4:12,4:12]=[220,45,45,254];Image.fromarray(pixels).save(project/'Input'/route)
+ prepared,plan=prepare_import(game,project);assert len(plan['patches'])==4 and not plan['errors']
+ before={p.name:sha(p) for p in (game/'data01').glob('*.gfs')}
+ folder,records=export_mod_zips(prepared,root/'MultiMods');assert {r['character'] for r in records}=={'annie','filia'}
+ ids=[]
+ for record in records:
+  with zipfile.ZipFile(folder/record['file']) as archive:
+   ids.append(json.loads(archive.read('mod.json'))['id'])
+   assert all(record['character'] in name for name in archive.namelist() if name!='mod.json')
+ assert len(set(ids))==2
+ cancelled=threading.Event()
+ def cancel_after_first(done,total,label):
+  if done==1:cancelled.set()
+ try:export_mod_zips(prepared,root/'CancelledMods',cancel_after_first,cancelled)
+ except Cancelled:pass
+ else:raise AssertionError('Mod ZIP cancellation was ignored')
+ assert not list((root/'CancelledMods').iterdir())
+ # Legacy entry names must remain temp paths in manager packages.
+ modern_archives={p.name:p.read_bytes() for p in (game/'data01').glob('*.gfs')}
+ for path in (game/'data01').glob('*.gfs'):
+  with GFS(path) as archive:entries={k.replace('characters/','temp/').replace('sprites/','temp/true_color_sprites/'):archive.read(k) for k in archive.entries}
+  if path.name=='characters-foits.gfs':entries={k:v[:8]+struct.pack('<I',3)+v[12:] for k,v in entries.items()}
+  make_gfs(path,entries)
+ legacy,legacy_manifest=export_project(game,root/'ModProjects',['annie'],limit=1)
+ route=next(iter(legacy_manifest['exports']));pixels=np.array(Image.open(legacy/'Output'/route).convert('RGBA'));pixels[4:12,4:12]=[220,45,45,254];Image.fromarray(pixels).save(legacy/'Input'/route)
+ lp,_=prepare_import(game,legacy);lf,lr=export_mod_zips(lp,root/'LegacyMods')
+ with zipfile.ZipFile(lf/lr[0]['file']) as archive:assert 'characters-art.gfs/temp/annie.art' in archive.namelist()
+ for name,content in modern_archives.items():(game/'data01'/name).write_bytes(content)
+ assert {p.name:sha(p) for p in (game/'data01').glob('*.gfs')}==before
+ prepared,plan=prepare_import(game,project)
+ app=ui.App();app.project.set(str(project));app.game.set(str(game));app.geometry('930x900');app.tabs.select(1);app.events.put(('prepare',(prepared,plan)))
+ deadline=time.monotonic()+10
+ while app.plan is None:
+  app.update();time.sleep(.01);assert time.monotonic()<deadline
+ errors=[]
+ try:
+  assert 'disabled' not in app.mod_button.state()
+  assert app.mod_button.winfo_x()+app.mod_button.winfo_width()<=app.apply_button.winfo_x()
+  assert app.mod_button.winfo_x()>=app.prepare_button.winfo_x()+app.prepare_button.winfo_width()
+  with patch.object(ui.filedialog,'askdirectory',return_value=str(root/'UIMods')),patch.object(ui.messagebox,'showerror',side_effect=lambda *a:errors.append(a)):
+   app.mod_button.invoke();deadline=time.monotonic()+20
+   while app.busy:
+    app.update();time.sleep(.01);assert time.monotonic()<deadline
+  assert not errors and 'Saved 2 character mod ZIPs' in app.status.get(),errors
+  assert 'disabled' not in app.mod_button.state() and 'disabled' not in app.apply_button.state()
+  app.project.set(str(root));assert 'disabled' in app.mod_button.state()
+ finally:app.destroy()
+ passed.append('per-character mod ZIPs isolate assets, preserve legacy paths, cancel cleanly, and export through adjacent UI button')
+
 
 def review_regressions(root,passed):
  from unittest.mock import patch

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.8 — 2026-10-19
+
+- Add Save mod ZIPs beside Apply to export one verified mod-manager ZIP per character with ready replacements, without modifying the game.
+- Continue frame matching when exported PNGs or whole character folders are missing, and report skipped frames instead of aborting the remaining characters.
+- Preserve internal frame numbers and skip incomplete layered frames so missing exports cannot create invalid copy plans.
+
 ## 0.2.7 — 2026-10-18
 
 - Correct legacy sprite colors using embedded character palette gradients and material ranges instead of DDS row indices.

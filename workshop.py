@@ -1,6 +1,6 @@
 """Export mirrored projects and prepare/apply art-only PNG replacements."""
 from pathlib import Path
-import datetime,hashlib,io,json,os,shutil,struct,ctypes,tempfile
+import datetime,hashlib,io,json,os,shutil,struct,ctypes,tempfile,zipfile
 import numpy as np
 from PIL import Image
 from scipy.spatial import cKDTree
@@ -557,7 +557,7 @@ def game_running():
   return False
  finally:kernel.CloseHandle(snapshot)
 
-def apply_import(prepared,progress=lambda *a:None,check_running=True):
+def validate_prepared(prepared,check_running=False):
  prepared=Path(prepared).resolve();plan=json.loads((prepared/'plan.json').read_text(encoding='utf-8'))
  if plan.get('status')!='prepared' or not plan['patches']:raise ValueError('There are no prepared replacements to apply.')
  if check_running and game_running():raise ValueError('Close Skullgirls before applying an import.')
@@ -585,6 +585,57 @@ def apply_import(prepared,progress=lambda *a:None,check_running=True):
   ordered=sorted(plan['patches'],key=lambda r:(r['archive'],r['offset']))
   for a,b in zip(ordered,ordered[1:]):
    if a['archive']==b['archive'] and a['offset']+a['bytes']>b['offset']:raise ValueError('Prepared art writes overlap.')
+ return prepared,plan,source,project,manifest
+
+
+def export_mod_zips(prepared,parent,progress=lambda *a:None,cancel=None):
+ stopped(cancel);prepared,plan,source,project,_=validate_prepared(prepared)
+ parent=Path(parent).expanduser().resolve()
+ if parent.is_relative_to(source.parent) or any(parent.is_relative_to(project/branch) for branch in ['Input','Output','Prepared','Backups']):raise ValueError('Save mod ZIPs outside the game installation and project working folders.')
+ parent.mkdir(parents=True,exist_ok=True)
+ groups={}
+ for record in plan['patches']:groups.setdefault(record['character'],[]).append(record)
+ # Stage the complete batch before publishing any ZIPs.
+ with tempfile.TemporaryDirectory(dir=parent,prefix='.workshop-mods-') as staging:
+  staging=Path(staging);result=[]
+  for index,(name,records) in enumerate(sorted(groups.items())):
+   stopped(cancel);progress(index,len(groups),f'Building {NAMES[name]} mod ZIP…');assets={};identity=hashlib.sha256(name.encode())
+   for archive_name in sorted({r['archive'] for r in records}):
+    stopped(cancel)
+    with GFS(source/archive_name) as archive:
+     bank=next(bank for bank,(filename,_) in ART_FILES.items() if filename==archive_name);suffix=ART_FILES[bank][1]
+     location=archive.entries[f'characters/{name}{suffix}'];offset,size=location
+     internal=next(key for key,value in archive.entries.items() if value==location)
+     safe_path(staging,internal)
+     content=bytearray(archive.data[offset:offset+size])
+     for record in records:
+      if record['archive']!=archive_name:continue
+      payload=safe_path(prepared,record['payload']).read_bytes()
+      if hashlib.sha256(payload).hexdigest()!=record['payload_sha256']:raise ValueError('A prepared payload was altered.')
+      start=record['offset']-offset
+      if not 0<=start<=size-len(payload):raise ValueError('A prepared slot escapes its character asset.')
+      content[start:start+len(payload)]=payload
+     path=archive_name+'/'+internal;assets[path]=bytes(content);identity.update(path.encode());identity.update(content)
+   info=dict(id=f'spriteworkshop.{name}.{identity.hexdigest()[:16]}',name=f'{NAMES[name]} sprite replacements',author='Sprite Workshop',desc='Prepared character sprite replacements. Requires the same game version used to prepare this mod.',version='1.0.0',url=None)
+   filename=name+'-sprites.zip'
+   with zipfile.ZipFile(staging/filename,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as output:
+    output.writestr('mod.json',json.dumps(info,indent=2))
+    for path,content in assets.items():stopped(cancel);output.writestr(path,content)
+   with zipfile.ZipFile(staging/filename) as output:
+    if output.testzip() is not None:raise ValueError('Mod ZIP verification failed.')
+    for path,content in assets.items():
+     if output.read(path)!=content:raise ValueError('A packaged character asset differs from the prepared art.')
+   result.append(dict(character=name,file=filename,assets=list(assets),frames=len(records)))
+  # Recheck the baseline and Inputs before publishing a potentially long export.
+  stopped(cancel);validate_prepared(prepared);stopped(cancel)
+  folder=unique(parent,'Skullgirls Mods')
+  for record in result:(staging/record['file']).replace(folder/record['file'])
+  progress(len(groups),len(groups),f'Saved {len(result)} character mod ZIPs')
+  return folder,result
+
+
+def apply_import(prepared,progress=lambda *a:None,check_running=True):
+ prepared,plan,source,project,manifest=validate_prepared(prepared,check_running)
  backup=unique(project/'Backups','Import');receipt=dict(schema=SCHEMA,game=str(source),before=plan['source_hashes'],after={},frames=len(plan['patches']),protected=plan['protected_hashes'],status='backing_up')
  write_json(backup/'restore.json',receipt)
  for i,(name,digest) in enumerate(plan['source_hashes'].items()):

@@ -14,6 +14,10 @@ You supply your installed game or an older depot. Game archives, sprites, and th
 2. **Import replacements:** use **Import animation sequence** to select numbered PNGs, choose an animation/layer and the first destination frame, and review the mapping. Any filename prefix works; originals stay unchanged. Select one PNG and its destination to fix a single frame. Optional replacement backs up existing Input frames into Sequence Imports. Alternatively, place edited PNGs in Input at the same relative paths as Output. Check Input, prepare previews, and inspect fitting notes. Close the game before applying. The app backs up affected art archives and verifies the installed changes.
 3. **Sort between projects:** match an old source project to a new target project, then copy ready PNGs into target Input. Original Output files and existing edited Input files are preserved. Pixel-identical frames are skipped.
 
+Matching supports projects with different character selections. Removed Output character folders and missing PNGs are skipped and recorded in the match report; later characters continue matching. Incomplete layered frames are skipped as a whole.
+
+After preparing and reviewing replacements, **Save mod ZIPs…** beside Apply exports one ZIP per character with ready changes. Import these ZIPs into Skullgirls Mod Manager. The ZIPs contain patched character art assets and `mod.json`; exporting leaves the game and Input files unchanged. Use the same game version used for preparation. Mods that replace the same character art asset can override each other according to manager load order.
+
 ```text
 Skullgirls Project .../
   Output/character/character/data/.../frames/frame.png
