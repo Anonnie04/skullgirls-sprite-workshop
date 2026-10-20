@@ -18,6 +18,8 @@ Matching supports projects with different character selections. Removed Output c
 
 After preparing and reviewing replacements, **Save mod ZIPs…** beside Apply exports one ZIP per character with ready changes. Import these ZIPs into Skullgirls Mod Manager. The ZIPs contain patched character art, matching character metadata, and `mod.json`; exporting leaves the game and Input files unchanged. Keep each ZIP's art and metadata together and use the same game version used for preparation. Mods that replace the same character can override each other according to manager load order.
 
+Filia and Valentine standing idle edits also update their separate animated character-select previews, in both **Apply** and **Save mod ZIPs…**. Edit the usual idle PNGs; no separate atlas editing is needed. Workshop verifies the corresponding original artwork, preserves menu frame timing and placement, and includes the updated texture and frame table. Other characters' menu previews currently stay unchanged. Re-export older ZIPs with v0.2.12 to include the menu preview.
+
 ```text
 Skullgirls Project .../
   Output/character/character/data/.../frames/frame.png
@@ -30,7 +32,7 @@ Skullgirls Project .../
 
 **Generate full empty Input tree** builds the complete replacement folder layout without extracting every animation. Digital Art Compendium references provide animation names when available; otherwise exports use internal frame numbers. Frames without reliable Compendium matches remain importable in unmapped folders.
 
-Imports preserve animation timing, origins, hitboxes, tile masks, palettes, and lighting normals. Replacement streams can grow: the Workshop rebuilds affected archives and updates only art storage pointers, channel lengths, and brightness encoding flags in character metadata. It does not reduce colors, consolidate materials, or adjust shading to meet the old compressed byte budget. Translucent palette materials are supported. Artwork still uses the installed game's palette and tile coverage, so colors absent from that palette cannot always be reproduced exactly. Review the prepared preview before applying. Future game updates can require a new export or decoder changes.
+Imports preserve animation timing, origins, hitboxes, tile masks, palettes, and lighting normals. Replacement streams can grow: the Workshop rebuilds affected archives and updates art storage pointers, channel lengths, brightness encoding flags, and VRSN 9 art-memory sizes in character metadata. Both Apply and Save mod ZIPs keep those sizes large enough for the resulting art banks. It does not reduce colors, consolidate materials, or adjust shading to meet the old compressed byte budget. Translucent palette materials are supported. Artwork still uses the installed game's palette and tile coverage, so colors absent from that palette cannot always be reproduced exactly. Review the prepared preview before applying. Future game updates can require a new export or decoder changes.
 
 Current FOIT v9, older v3, and legacy archives without version headers are supported, including older `temp` archive paths. Characters without a default palette in the selected game version are excluded from the character list. Native CPU compression is used when available; GPU acceleration is not required. The first native compilation in an app session takes additional time.
 

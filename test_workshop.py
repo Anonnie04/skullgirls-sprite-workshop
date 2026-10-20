@@ -18,6 +18,7 @@ def fixture(root):
   if variant:index=np.flip(index,axis=1).copy()
   streams=[bytes(256),g.tobytes(),index.tobytes()];encoded=[bytes([126])+len(b).to_bytes(2,'big')+b for b in streams]
   offset=len(arts[bank]);arts[bank].extend(b''.join(encoded))
+  if bank==4:arts[bank].append(0xbb)
   return dict(n=1,w=1,h=1,used=1,flags=flags,mask='01',offset=offset,sizes=tuple(map(len,encoded)))
  def record(bank,images):
   result=struct.pack('<2iBBB',0,0,bank,0,sum(1<<k for k in images))
@@ -454,6 +455,7 @@ def run(report):
     for record in plan['patches']:
      if record['art_bank']==bank:
       start=len(expected);expected.extend((prepared/record['payload']).read_bytes())
+      if bank==4:expected.append(0xbb)
       assert new_frames[record['frame']]['images'][record['layer']]['offset']==start
     assert archive.read(archive_name+'/characters/annie'+suffix)==expected
   assert {p.name:sha(p) for p in (game/'data01').glob('*.gfs')}==original
@@ -498,11 +500,169 @@ def run(report):
   review_regressions(root,passed)
   mod_zip_regressions(root,passed)
   relocation_regressions(root,passed)
+  art_memory_regressions(root,passed)
+  select_preview_regressions(root,passed)
   result=dict(status='passed',native_cpu_available=codec.native_optimal is not None,checks=passed,project=str(project),game_fixture=str(game))
  except Exception as exc:
   import traceback
   result=dict(status='failed',checks=passed,error=str(exc),traceback=traceback.format_exc(),test_root=str(root));write_json(report,result);raise
  write_json(report,result);print(json.dumps(result,indent=2),flush=True);return result
+
+def select_preview_regressions(root,passed):
+ from select_preview import pack,unpack,read_preview,build_preview,EMPTY
+ from unittest.mock import patch
+ import repacking
+ import select_preview
+ area=root/'SelectPreview';area.mkdir();game=fixture(area);source=game/'data01'
+ for path in source.glob('*.gfs'):
+  with GFS(path) as a:entries={k.replace('annie','filia'):a.read(k) for k in a.entries}
+  make_gfs(path,entries)
+ with GFS(source/'characters-art.gfs') as a,GFS(source/'characters-foits.gfs') as f:
+  main=a.read('characters/filia.art');frames=parse_frames_data('filia',f.read('characters/filia.foit'),len(main))
+ raw=decode_image(frames[1]['images'][0],main);canvas=pack(raw)
+ def text(s):return struct.pack('>Q',len(s))+s
+ sprite=text(b'2.0')+text(b'character_select_filia')+struct.pack('>I',25)+text(b'unigned char tile_x, tile_y, tile_u, tile_v;')
+ count_pos=len(sprite)+8
+ header=sprite+struct.pack('>6Q',4,2,2,1,16,16)
+ tail=b'original animation names and loop metadata'
+ records=[(0,1,4,3.5,7.25),(1,1,7,-2.,9.)]
+ sprite=header+bytes([0,0,0,0])*2+b''.join(struct.pack('>IIIff',*r) for r in records)+tail
+ dds=bytearray(128);dds[:4]=b'DDS ';struct.pack_into('<I',dds,4,124);struct.pack_into('<III',dds,12,16,16,32)
+ struct.pack_into('<8I',dds,76,32,64,0,16,0xf800,0x7e0,0x1f,0)
+ dds=bytes(dds)+canvas.astype('<u2').tobytes()
+ with GFS(source/'sprites.gfs') as a:entries={k:a.read(k) for k in a.entries}
+ entries.update({'sprites/character_select_filia.spr.msb':sprite,'sprites/character_select_filia.dds':dds,'sprites/unrelated.dds':b'unrelated menu art'})
+ make_gfs(source/'sprites.gfs',entries)
+ project,manifest=export_project(game,area/'Projects',['filia'],limit=2)
+ route=next(r for r,e in manifest['exports'].items() if e['frame']==1)
+ pixels=np.array(Image.open(project/'Output'/route).convert('RGBA'));pixels[3:12,3:12]=[220,45,45,254];Image.fromarray(pixels).save(project/'Input'/route)
+ prepared,plan=prepare_import(game,project);assert len(plan['patches'])==1 and not plan['errors'],plan
+ original={p.name:sha(p) for p in source.glob('*.gfs')}
+ folder,result=export_mod_zips(prepared,area/'Mods')
+ with zipfile.ZipFile(folder/result[0]['file']) as z:
+  newsprite=z.read('sprites.gfs/sprites/character_select_filia.spr.msb');newdds=z.read('sprites.gfs/sprites/character_select_filia.dds')
+  decoded,newrecords,newheader,newcount,newtail=read_preview(newsprite,newdds)
+  assert not np.array_equal(decoded[0],canvas) and np.array_equal(decoded[1],canvas)
+  assert [r[2:] for r in newrecords]==[r[2:] for r in records] and newtail==tail
+  assert newheader[:count_pos]==header[:count_pos] and newheader[count_pos+8:]==header[count_pos+8:]
+  # The update uses the actual encoded result, including transparency/outline.
+  foit=z.read('characters-foits.gfs/characters/filia.foit');art=z.read('characters-art.gfs/characters/filia.art')
+  updated=parse_frames_data('filia',foit,len(art));expected=pack(decode_image(updated[1]['images'][0],art))
+  assert np.array_equal(decoded[0],expected)
+ assert {p.name:sha(p) for p in source.glob('*.gfs')}==original
+ passed.append('Filia menu ZIP uses encoded idle art, preserves untouched frames, timing, origins and animation metadata; export is read-only')
+ backup,receipt=apply_import(prepared,check_running=False)
+ assert 'sprites.gfs' in receipt['before'] and 'sprites.gfs' not in receipt['protected']
+ with GFS(source/'sprites.gfs') as a:
+  assert a.read('sprites/character_select_filia.spr.msb')==newsprite and a.read('sprites/character_select_filia.dds')==newdds
+  assert a.read('sprites/unrelated.dds')==entries['sprites/unrelated.dds'] and a.read('sprites/filia_1p.dds')==entries['sprites/filia_1p.dds']
+ assert project_info(project)[1]['palette_archive_sha256']==sha(source/'sprites.gfs')
+ restore_import(backup,check_running=False);assert {p.name:sha(p) for p in source.glob('*.gfs')}==original
+ passed.append('direct Apply includes backed-up menu atlas, preserves every unrelated texture and palette, and Restore recovers exact archive bytes')
+ prepared,plan=prepare_import(game,project)
+ original_replace=Path.replace;calls=[]
+ def fail_menu(path,target):
+  if Path(target).resolve()==(source/'sprites.gfs').resolve():raise OSError('injected menu install failure')
+  return original_replace(path,target)
+ with patch.object(Path,'replace',fail_menu):expect_error(lambda:apply_import(prepared,check_running=False),'injected menu')
+ assert {p.name:sha(p) for p in source.glob('*.gfs')}==original
+ passed.append('menu install failure rolls back all character archives and the menu archive')
+ with patch.object(select_preview,'signature',side_effect=[np.zeros((2,2,4)),np.ones((2,2,4))]):
+  expect_error(lambda:export_mod_zips(prepared,area/'Refused'),'Cannot verify')
+ assert {p.name:sha(p) for p in source.glob('*.gfs')}==original
+ passed.append('mismatched menu artwork refuses synchronization before any game writes')
+ # Atlas growth and transparency must not corrupt 8-bit tile coordinates.
+ blank=np.full((16,16),EMPTY,np.uint16)
+ built=build_preview([blank,canvas],records,header,count_pos,tail,dds,'sprites/check')
+ cs,rs,*_=read_preview(built['sprites.gfs/sprites/check.spr.msb'],built['sprites.gfs/sprites/check.dds'])
+ assert np.array_equal(cs[0],blank) and np.array_equal(cs[1],canvas)
+ expect_error(lambda:read_preview(sprite,dds[:128]+b'bad'),'dimensions')
+ bad=bytearray(dds);struct.pack_into('<I',bad,80,4);expect_error(lambda:read_preview(sprite,bad),'RGB565')
+ passed.append('menu atlas grows for new tiles, round-trips blank frames, and rejects truncated or unsupported textures')
+
+
+def art_memory_regressions(root,passed):
+ import zipfile
+ from unittest.mock import patch
+ from repacking import art_memory_fields,character_assets
+ folder=root/'ArtMemory';folder.mkdir();game=fixture(folder);data=game/'data01'
+ with GFS(data/'characters-foits.gfs') as archive:original=archive.read('characters/annie.foit')
+ sizes={}
+ for bank,(archive,suffix) in ART_FILES.items():
+  with GFS(data/archive) as packed:sizes[bank]=len(packed.read('characters/annie'+suffix))
+ label=b'annie_1p.pal'
+ table=struct.pack('<5iH',101,102,sizes[5],sizes[4],103,1)+bytes([len(label)])+label
+ metadata=original[:16]+table+original[16:]
+ make_gfs(data/'characters-foits.gfs',{'characters/annie.foit':metadata,'untouched.bin':b'untouched'})
+ fields=art_memory_fields(metadata,'annie');assert fields=={5:24,4:28}
+ assert not art_memory_fields(metadata[:35],'annie') and not art_memory_fields(metadata,'filia')
+ assert not art_memory_fields(metadata+bytes([len(label)])+label,'annie')
+ bad=bytearray(metadata);struct.pack_into('<H',bad,36,257);assert not art_memory_fields(bad,'annie')
+ for version in [3,10]:
+  bad=bytearray(metadata);struct.pack_into('<I',bad,8,version);assert not art_memory_fields(bad,'annie')
+ assert not art_memory_fields(b'legacy'+metadata[6:],'annie')
+ passed.append('art-memory lookup validates VRSN 9 and complete unique palette tables; truncated and unsupported layouts stay unchanged')
+ project,manifest=export_project(game,folder/'Projects',['annie'])
+ for index in [0,2]:
+  route=next(k for k,v in manifest['exports'].items() if v['frame']==index)
+  with Image.open(project/'Output'/route) as image:pixels=np.array(image.convert('RGBA'))
+  pixels[4:12,4:12]=[180,35,35,254];Image.fromarray(pixels).save(project/'Input'/route)
+ prepared,plan=prepare_import(game,project);assert len(plan['patches'])==2 and not plan['errors']
+ baseline={p.name:sha(p) for p in data.glob('*.gfs')}
+ output,mods=export_mod_zips(prepared,folder/'Mods')
+ with zipfile.ZipFile(output/mods[0]['file']) as archive:assets={p:archive.read(p) for p in archive.namelist() if p!='mod.json'}
+ changed=assets['characters-foits.gfs/characters/annie.foit']
+ parsed=parse_frames_data('annie',changed,len(assets['characters-art.gfs/characters/annie.art']))
+ streamed=assets['characters-art-pt.gfs/characters/annie.art-pt']
+ for frame in parsed:
+  if frame['art_bank']!=4:continue
+  for image in frame['images'].values():
+   if image['offset']>=0:assert streamed[image['offset']+sum(image['sizes'])]==0xbb
+ # Model the actual renderer's completion check, which the preview decoder
+ # does not perform. The old exporter left EOF or another RLE packet here.
+ target=next(r for r in plan['patches'] if r['art_bank']==4)
+ image=parsed[target['frame']]['images'][target['layer']];end=image['offset']+sum(image['sizes'])
+ missing=streamed[:end]+b'\0'+streamed[end+1:]
+ assert missing[end]!=0xbb and streamed[end]==0xbb
+ passed.append('every streamed layer retains its runtime 0xBB completion marker outside compressed channel lengths')
+ allowed=set()
+ for bank,(archive,suffix) in ART_FILES.items():
+  size=len(assets[archive+'/characters/annie'+suffix]);assert size>sizes[bank]
+  assert struct.unpack_from('<i',changed,fields[bank])[0]==size
+  allowed.update(range(fields[bank],fields[bank]+4))
+ frames,positions=parse_frames_data('annie',metadata,sizes[5],with_locations=True)
+ for record in plan['patches']:
+  for key in map(tuple,record['affected_references']):
+   pos=positions[key];allowed.update(range(pos,pos+16));meta=frames[key[0]]['images'][key[1]]
+   allowed.add(pos-len(bytes.fromhex(meta['mask']))-(8 if meta['flags']&4 else 0)-1)
+ assert len(metadata)==len(changed) and all(a==b or i in allowed for i,(a,b) in enumerate(zip(metadata,changed)))
+ assert {p.name:sha(p) for p in data.glob('*.gfs')}==baseline
+ passed.append('mod ZIP grows both art-memory sizes while preserving all non-storage metadata and source archives')
+ # Oversized reservations are retained rather than reduced to payload length.
+ reserved=bytearray(metadata)
+ for pos in fields.values():struct.pack_into('<i',reserved,pos,1_000_000)
+ make_gfs(data/'characters-foits.gfs',{'characters/annie.foit':reserved,'untouched.bin':b'untouched'})
+ large=character_assets(data,prepared,'annie',plan['patches'])['characters-foits.gfs/characters/annie.foit']
+ assert all(struct.unpack_from('<i',large,pos)[0]==1_000_000 for pos in fields.values())
+ make_gfs(data/'characters-foits.gfs',{'characters/annie.foit':metadata,'untouched.bin':b'untouched'})
+ passed.append('relocation preserves larger existing art-memory reservations')
+ replace=Path.replace;installs=[]
+ def fail_second(path,target):
+  if path.parent.name.startswith('.workshop-import-'):
+   installs.append(path)
+   if len(installs)==2:raise OSError('injected memory-size install failure')
+  return replace(path,target)
+ with patch.object(Path,'replace',fail_second):expect_error(lambda:apply_import(prepared,check_running=False),'injected memory-size')
+ assert {p.name:sha(p) for p in data.glob('*.gfs')}==baseline
+ backup,receipt=apply_import(prepared,check_running=False);assert receipt['status']=='installed'
+ for archive in plan['source_hashes']:
+  with GFS(data/archive) as packed:
+   for route,content in assets.items():
+    if route.startswith(archive+'/'):assert packed.read(route.split('/',1)[1])==content
+ restore_import(backup,check_running=False)
+ assert {p.name:sha(p) for p in data.glob('*.gfs')}==baseline
+ passed.append('direct Apply matches ZIP art and size metadata; failed install rolls back; Restore returns every original archive byte')
+
 
 def relocation_regressions(root,passed):
  """A detailed translucent edit must grow, not be recolored to fit 12 bytes."""

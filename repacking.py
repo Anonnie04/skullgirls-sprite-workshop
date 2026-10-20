@@ -1,15 +1,38 @@
-"""Relocate larger art streams, changing only their FOIT storage references."""
+"""Relocate art streams and update their FOIT references and memory sizes."""
 from pathlib import Path
 import hashlib,os,shutil,struct,tempfile
 from decoder import GFS,Reader,parse_frames_data,decode_image
 
 
+def art_memory_fields(metadata,name):
+ """Locate VRSN 9 art-size fields using the validated palette-name table."""
+ if len(metadata)<12 or metadata[4:8]!=b'VRSN' or struct.unpack_from('<I',metadata,8)[0]!=9:return {}
+ label=(name+'_1p.pal').encode('ascii')
+ if len(label)>255:return {}
+ marker=bytes([len(label)])+label;at=metadata.find(marker)
+ if at<34 or metadata.find(marker,at+len(marker))>=0:return {}
+ table=at-22
+ if any(size<0 for size in struct.unpack_from('<5i',metadata,table)):return {}
+ count=struct.unpack_from('<H',metadata,at-2)[0]
+ if not 1<=count<=256:return {}
+ cursor=at
+ for _ in range(count):
+  if cursor>=len(metadata):return {}
+  length=metadata[cursor];cursor+=1
+  if length<5 or length>len(metadata)-cursor:return {}
+  value=metadata[cursor:cursor+length]
+  if not value.endswith(b'.pal') or any(ch<32 or ch>126 for ch in value):return {}
+  cursor+=length
+ return {5:table+8,4:table+12}
+
+
 def refresh_project_metadata(project,source,characters):
- from workshop import project_info,data_folder,write_json
+ from workshop import project_info,data_folder,write_json,sha
  project,manifest=project_info(project)
  if data_folder(manifest['game'])!=source:raise ValueError('Project game changed during import.')
  with GFS(source/'characters-foits.gfs') as archive:
   for name in characters:manifest['characters'][name]['foit_sha256']=hashlib.sha256(archive.read(f'characters/{name}.foit')).hexdigest()
+ manifest['palette_archive_sha256']=sha(source/'sprites.gfs')
  write_json(project/'project.json',manifest)
 
 
@@ -20,6 +43,7 @@ def character_assets(source,prepared,name,records):
   location=foits.entries[f'characters/{name}.foit']
   internal=next(k for k,v in foits.entries.items() if v==location)
   metadata=bytearray(foits.read(internal))
+  memory_fields=art_memory_fields(metadata,name)
   frames,positions=parse_frames_data(name,metadata,art.entries[f'characters/{name}.art'][1],with_locations=True)
   for bank in sorted({r['art_bank'] for r in records}):
    archive_name,suffix=ART_FILES[bank]
@@ -47,10 +71,20 @@ def character_assets(source,prepared,name,records):
       flag_pos=pos-len(bytes.fromhex(old['mask']))-(8 if old['flags']&4 else 0)-1
       metadata[flag_pos]=record['encoded_flags']
      content.extend(payload)
+     # The runtime checks this byte before decoding streamed (bank 4) art.
+     # It is outside the three channel sizes and must survive relocation.
+     if bank==4:content.append(0xbb)
      decode_image({**old,'offset':new_offset,'sizes':sizes,'flags':record['encoded_flags']},content)
+    # The game uses these header values for art memory sizing. The preview
+    # decoder only follows pointers, so it cannot catch an undersized budget.
+    if bank in memory_fields:
+     position=memory_fields[bank];reserved=struct.unpack_from('<i',metadata,position)[0]
+     if len(content)>reserved:struct.pack_into('<i',metadata,position,len(content))
     assets[archive_name+'/'+art_internal]=bytes(content)
-  # Every other FOIT byte is left as supplied: timing, hits, origins and masks.
+  # Other FOIT bytes stay supplied: timing, hits, origins, masks and palettes.
   assets['characters-foits.gfs/'+internal]=bytes(metadata)
+  from select_preview import sync_preview
+  assets.update(sync_preview(source,name,frames,art.read(f'characters/{name}.art'),assets))
  return assets
 
 
@@ -99,12 +133,14 @@ def apply_relocated(prepared,plan,source,project,progress,check_running):
  for name in sorted({r['character'] for r in plan['patches']}):
   progress(0,1,f'Building {name} art without storage color fitting…')
   assets.update(character_assets(source,prepared,name,[r for r in plan['patches'] if r['character']==name]))
+ before=dict(plan['source_hashes']);protected=dict(plan['protected_hashes'])
+ if any(path.startswith('sprites.gfs/') for path in assets):before['sprites.gfs']=protected.pop('sprites.gfs')
  backup=unique(project/'Backups','Import')
- receipt=dict(schema=plan['schema'],storage='relocatable',characters=sorted({r['character'] for r in plan['patches']}),game=str(source),before=plan['source_hashes'],after={},frames=len(plan['patches']),protected=plan['protected_hashes'],status='backing_up')
+ receipt=dict(schema=plan['schema'],storage='relocatable',characters=sorted({r['character'] for r in plan['patches']}),game=str(source),before=before,after={},frames=len(plan['patches']),protected=protected,status='backing_up')
  write_json(backup/'restore.json',receipt)
  with tempfile.TemporaryDirectory(dir=source,prefix='.workshop-import-') as staging:
   staging=Path(staging)
-  for name,digest in plan['source_hashes'].items():
+  for name,digest in before.items():
    shutil.copy2(source/name,backup/name)
    if sha(backup/name)!=digest:raise ValueError('Backup verification failed; no archives were changed.')
    replacements={p.split('/',1)[1]:content for p,content in assets.items() if p.split('/',1)[0]==name}
@@ -113,12 +149,12 @@ def apply_relocated(prepared,plan,source,project,progress,check_running):
   validate_prepared(prepared,check_running)
   installed=[]
   try:
-   for name in plan['source_hashes']:
+   for name in before:
     if check_running and game_running():raise ValueError('Close Skullgirls before applying an import.')
-    if sha(source/name)!=plan['source_hashes'][name]:raise ValueError('Game files changed during import.')
+    if sha(source/name)!=before[name]:raise ValueError('Game files changed during import.')
     installed.append(name);(staging/name).replace(source/name)
     receipt['after'][name]=sha(source/name)
-   for name,digest in plan['protected_hashes'].items():
+   for name,digest in protected.items():
     if sha(source/name)!=digest:raise ValueError('A protected archive changed unexpectedly.')
    refresh_project_metadata(project,source,receipt['characters'])
   except Exception:

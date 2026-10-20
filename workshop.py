@@ -724,7 +724,7 @@ def restore_import(backup,progress=lambda *a:None,check_running=True):
  for name,digest in receipt['protected'].items():
   if name not in ['characters-foits.gfs','sprites.gfs'] or sha(source/name)!=digest:raise ValueError('Game metadata or palettes changed since this import. Restore refused.')
  for name,digest in receipt['after'].items():
-  if name not in ['characters-art.gfs','characters-art-pt.gfs','characters-foits.gfs']:raise ValueError('Invalid backup archive.')
+  if name not in ['characters-art.gfs','characters-art-pt.gfs','characters-foits.gfs','sprites.gfs']:raise ValueError('Invalid backup archive.')
   allowed={digest}
   if receipt['status']=='restoring':allowed.add(receipt['before'][name])
   if sha(source/name) not in allowed:raise ValueError('The game has changed since this import. Restore refused to avoid overwriting newer changes.')

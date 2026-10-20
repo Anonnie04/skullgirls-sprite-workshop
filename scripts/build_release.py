@@ -15,7 +15,7 @@ from version import __version__
 
 SOURCE_FILES = [
     "app.py", "version.py", "animation_sequence.py", "decoder.py", "layout.py", "project_match.py",
-    "compression.py", "compression_fast.py", "workshop.py", "workshop_app.py", "repacking.py",
+    "compression.py", "compression_fast.py", "workshop.py", "workshop_app.py", "repacking.py", "select_preview.py",
     "test_workshop.py", "workshop.spec", "requirements.txt", "requirements-dev.txt",
     ".python-version", ".gitignore", ".gitattributes", "README.md", "LICENSE",
     "CHANGELOG.md", "CONTRIBUTING.md", "docs/CUSTOM_SPRITES.md", "docs/WORKFLOW.md",

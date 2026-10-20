@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.12 — 2026-10-20
+
+- Update Filia and Valentine character-select idle previews from edited standing idle sprites in Apply and mod ZIP exports.
+- Verify source artwork, preserve menu timing, origins and animation metadata, and rebuild the RGB565 atlas with deduplicated tiles.
+- Back up, verify, roll back and restore the menu archive alongside character art; leave unrelated textures and palettes intact.
+
+## 0.2.11 — 2026-10-19
+
+- Preserve the runtime's 0xBB completion marker after each relocated streamed-art payload. Missing markers caused movement and attack sprites to be skipped despite decoding in previews.
+- Cover markers in original fixtures, exported ZIPs, and direct Apply/Restore checks.
+
+## 0.2.10 — 2026-10-19
+
+- Grow VRSN 9 art-memory sizes when relocated replacement streams expand either character art bank.
+- Use the corrected metadata for both direct Apply and exported mod ZIPs, including existing prepared imports.
+- Preserve larger reservations and all unrelated metadata; verify export, direct apply, rollback and restore with art-size regression fixtures.
+
 ## 0.2.9 — 2026-10-19
 
 - Remove fixed compressed-slot limits from new imports by relocating replacement streams and updating only their art pointers, channel lengths, and brightness encoding flags.
