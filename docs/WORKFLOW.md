@@ -14,6 +14,14 @@ Choose the old exported source and the new exported target. Match frames produce
 
 Copy matched to target Input stages only confident, pixel-different editable PNGs. An existing edited Input file is preserved. An unchanged reference copy may be replaced by the matched source. Source and target Output exports remain intact. If the report says identical, no Input copy is created. Different folder names or different game metadata do not necessarily mean different rendered artwork.
 
+Project matching compares softly normalized outlines so small emblem, edge and alpha-boundary revisions across game versions do not overwhelm pose similarity. Frame order, aspect ratio, editable layers and ambiguous neighboring poses still constrain matches. This does not change Compendium animation naming. Rerun Match projects to regenerate older matching reports; exporting the projects again is not required.
+
+After sequence alignment, Workshop searches for reordered or reused artwork among the remaining frames. It aligns alpha images at their native scale, with small scale tolerance, so an altered emblem changing the bounding box does not distort the entire comparison. Relative opacity includes faint effects. The table shows aligned shape overlap for recovered candidates. Strong, distinct matches and identical repeated source images can be copied; uncertain candidates and different old images sharing one current target stay in review. Identical duplicates are copied to each destination once. Fully transparent pairs need no copy. Frame/layer compatibility and export integrity checks still apply.
+
+Double-click a pairing to inspect source and target images side by side; layered frames have a composite/layer selector. Select review rows (Ctrl/Shift for multiple) and click **Approve selected**, or approve from the preview. Approved pairings join **Copy ready PNGs to target Input**. Approval only saves a report decision; it does not copy files or change the game. **Return to review** removes a ready pairing from the copy plan. Use **Load report…** to reopen `matches.json` with its saved decisions; rerunning matching creates a fresh report.
+
+Choose only one different source variant per target. If a selected variant conflicts with ready or previously staged art, Workshop asks which one to keep and returns other ready choices to review. On the next Copy, an unchanged staged copy of an explicitly replaced variant is backed up under the report's `Input backups` folder before replacement. Later edits remain protected. Returning a pairing to review does not remove files that were already copied to Input. Incomplete or incompatible editable layers cannot be approved as a whole.
+
 ## Prepare, apply and restore
 
 Prepare previews reads the game and added Input PNGs, resolves frames, fits artwork, and creates a plan and payloads. Unchanged references, unknown paths, layered composites, shared-slot conflicts, and art that cannot fit are reported rather than silently imported.
@@ -31,3 +39,11 @@ Restore an import backup returns the affected archives to their verified origina
 Input recognition accepts one or two repeated character folders before `data`, and Compendium layouts with `frames` at different directory depths. Only unique normalized routes are accepted; filenames still identify the frame unless the animation sequence importer is used. Additional installed Compendium references are resolved lazily. A recognized reference can still be refused during preparation if no reliable stored game frame exists or individual layers are required. Input files are not moved, and integrity checks use their actual paths.
 
 Parasoul troop filenames accept the Compendium `Misc_` prefix as optional. The Compendium also contains unused troop poses and standalone bikes that have no corresponding standalone art slot in the game; these cannot be added through an art-only replacement. Use exported rider/bike frames or bike-part frames for edits to the assets the game actually stores.
+
+### Mod ZIP details
+
+After preparing replacements, choose **Save mod ZIPs…**. The Mod details window lets you edit the name, version and description written to `mod.json` for each character. Switch characters to edit separate details without losing drafts. Name and version must contain text; descriptions may be empty or span multiple lines. **Choose folder and export…** validates all characters before asking for a destination. Cancelling the folder picker keeps the window open. Drafts remain available per project during this Workshop session. Metadata edits affect exported ZIPs only.
+
+### Shape-overlap tolerance
+
+Set **Minimum shape overlap** in Sort between projects before matching. The slider runs from 50% to 100% in whole percentage points, with a 94% default. Both sequence matches and recovered poses must meet this minimum for automatic acceptance. Registration allows position shifts and small size differences. Lowering the minimum does not bypass editable-layer compatibility, competing poses or source-variant conflicts. Below-threshold pairings remain available for manual review when a pairing exists. Changing the slider leaves existing decisions unchanged; run **Match frames** to generate a new report with that value. Reports retain their selected threshold; older reports without a setting display 94%.

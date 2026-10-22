@@ -16,7 +16,11 @@ You supply your installed game or an older depot. Game archives, sprites, and th
 
 Matching supports projects with different character selections. Removed Output character folders and missing PNGs are skipped and recorded in the match report; later characters continue matching. Incomplete layered frames are skipped as a whole.
 
-After preparing and reviewing replacements, **Save mod ZIPs…** beside Apply exports one ZIP per character with ready changes. Import these ZIPs into Skullgirls Mod Manager. The ZIPs contain patched character art, matching character metadata, and `mod.json`; exporting leaves the game and Input files unchanged. Keep each ZIP's art and metadata together and use the same game version used for preparation. Mods that replace the same character can override each other according to manager load order.
+Matching also recovers reordered or repeated artwork and faint effects. Recovered rows show aligned shape overlap. Strong, distinct matches can be copied; ambiguous candidates and different old images sharing one current target stay in review. Identical repeated replacements are staged once per destination.
+
+Double-click a pairing to compare source and target images, then use **Approve selected** for reviewed frames. Ctrl/Shift selects multiple rows. **Return to review** undoes a ready decision; **Load report…** reopens saved approvals. Approving changes the report only—use **Copy ready PNGs to target Input** to stage replacements. Conflicting variants require an explicit choice, and replaced staged versions are backed up while later edits stay protected.
+
+After preparing and reviewing replacements, **Save mod ZIPs…** beside Apply exports one ZIP per character with ready changes. Before choosing the export folder, edit each character’s **Name**, **Version**, and **Description** in the Mod details window. Use the character selector for separate details in a batch. Name and version are required; description can be empty. Drafts are remembered for that project while Workshop stays open. Cancel closes the window without exporting. Import these ZIPs into Skullgirls Mod Manager. The ZIPs contain patched character art, matching character metadata, and `mod.json`; exporting leaves the game and Input files unchanged. Keep each ZIP's art and metadata together and use the same game version used for preparation. Mods that replace the same character can override each other according to manager load order.
 
 Filia and Valentine standing idle edits also update their separate animated character-select previews, in both **Apply** and **Save mod ZIPs…**. Edit the usual idle PNGs; no separate atlas editing is needed. Workshop verifies the corresponding original artwork, preserves menu frame timing and placement, and includes the updated texture and frame table. Other characters' menu previews currently stay unchanged. Re-export older ZIPs with v0.2.12 to include the menu preview.
 
@@ -70,3 +74,5 @@ Tests generate isolated synthetic archives and hidden UI fixtures; they do not c
 ## License
 
 [MIT](LICENSE). Portable builds also include the bundled dependencies' license notices.
+
+In **Sort between projects**, use **Minimum shape overlap** (50–100%, default 94%) to choose matching tolerance. Lower values allow more shape differences; higher values send more pairings to review. Click **Match frames** to use a changed value. Reports save the threshold and restore it when loaded. Layer compatibility, ambiguous poses and conflicting source variants still require review.

@@ -6,8 +6,9 @@ import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
 from PIL import Image,ImageTk,ImageDraw
 from decoder import NAMES,available_characters
-from project_match import match_projects,copy_matches
-from workshop import generate_input_tree,export_project,scan_input,prepare_import,apply_import,restore_import,project_info,export_mod_zips
+from project_match import match_projects,copy_matches,copy_required
+import match_review
+from workshop import generate_input_tree,export_project,scan_input,prepare_import,apply_import,restore_import,project_info,export_mod_zips,mod_details
 
 # Original art-deco styling: no game artwork or external fonts required.
 BG='#181416';PANEL='#292124';TEXT='#f5ead5';MUTED='#c2b39e';ACCENT='#e6bc68'
@@ -100,16 +101,28 @@ class App(tk.Tk):
   self.details=tk.StringVar(value='Preparation checks fitting and compression without modifying game files.');tk.Label(imports,textvariable=self.details,bg=BG,fg=MUTED,wraplength=920,justify='left').grid(row=5,column=0,columnspan=3,sticky='ew',pady=7)
   restore=tk.Frame(imports,bg=BG);restore.grid(row=6,column=0,columnspan=3,sticky='ew');self.restore_button=ttk.Button(restore,text='Restore an import backup…',command=self.start_restore);self.restore_button.pack(side='left');ttk.Button(restore,text='Open Input',command=lambda:self.open_branch('Input')).pack(side='right');ttk.Button(restore,text='Open Output',command=lambda:self.open_branch('Output')).pack(side='right',padx=8)
   matching=tk.Frame(self.tabs,bg=BG,padx=12,pady=12);matching.columnconfigure(1,weight=1);matching.rowconfigure(4,weight=1);self.tabs.add(matching,text='Sort between projects')
-  self.match_source=tk.StringVar();self.match_target=tk.StringVar();self.match_folder=None;self.match_report=None
+  self.match_source=tk.StringVar();self.match_target=tk.StringVar();self.match_folder=None;self.match_report=None;self.match_rows={}
   self.path_row(matching,0,'SOURCE PROJECT',self.match_source);self.path_row(matching,1,'TARGET PROJECT',self.match_target)
-  tk.Label(matching,text='Match exported frame sequences across versions, then copy old art into the target Input layout.\nInserted frames are accounted for. Uncertain matches are skipped; edited Input files are preserved; unchanged reference copies can be replaced.',bg=BG,fg=MUTED,justify='left',wraplength=920).grid(row=2,column=0,columnspan=3,sticky='ew',pady=12)
+  match_options=tk.Frame(matching,bg=BG);match_options.grid(row=2,column=0,columnspan=3,sticky='ew',pady=8);match_options.columnconfigure(1,weight=1)
+  tk.Label(match_options,text='Select review rows and approve, or double-click a pairing to compare its images. Decisions are saved in the report.\nCopy ready PNGs stages approved art into target Input. Existing edited files stay protected.',bg=BG,fg=MUTED,justify='left',wraplength=920).grid(row=0,column=0,columnspan=4,sticky='w',pady=(0,5))
+  self.overlap=tk.DoubleVar(value=94);self.overlap_label=tk.StringVar(value='94%')
+  tk.Label(match_options,text='Minimum shape overlap',bg=BG,fg=TEXT).grid(row=1,column=0,sticky='w',padx=(0,12))
+  self.overlap_slider=ttk.Scale(match_options,from_=50,to=100,variable=self.overlap,orient='horizontal');self.overlap_slider.grid(row=1,column=1,sticky='ew')
+  tk.Label(match_options,textvariable=self.overlap_label,bg=BG,fg=ACCENT,width=5).grid(row=1,column=2,padx=6)
+  tk.Label(match_options,text='Lower = more tolerant. Rematch to apply.',bg=BG,fg=MUTED).grid(row=1,column=3,sticky='e')
+  self.overlap.trace_add('write',lambda *args:self.overlap_label.set(f'{round(self.overlap.get())}%'))
   match_actions=tk.Frame(matching,bg=BG);match_actions.grid(row=3,column=0,columnspan=3,sticky='ew',pady=8)
   self.match_button=ttk.Button(match_actions,text='Match frames',command=self.start_match);self.match_button.pack(side='left')
+  self.approve_button=ttk.Button(match_actions,text='Approve selected',command=self.approve_records,state='disabled');self.approve_button.pack(side='left',padx=6)
+  self.unapprove_button=ttk.Button(match_actions,text='Return to review',command=self.return_records,state='disabled');self.unapprove_button.pack(side='left')
   self.copy_button=ttk.Button(match_actions,text='Copy ready PNGs to target Input',style='Accent.TButton',command=self.start_copy,state='disabled');self.copy_button.pack(side='right')
-  self.match_table=ttk.Treeview(matching,columns=('old','new','result'),show='headings',height=7)
+  self.match_table=ttk.Treeview(matching,columns=('old','new','result'),show='headings',height=6)
   for column,title,width in [('old','Source frame',160),('new','Target frame',420),('result','Result',280)]:self.match_table.heading(column,text=title);self.match_table.column(column,width=width)
   self.match_table.grid(row=4,column=0,columnspan=3,sticky='nsew');match_scroll=ttk.Scrollbar(matching,orient='vertical',command=self.match_table.yview);match_scroll.grid(row=4,column=3,sticky='ns');self.match_table.configure(yscrollcommand=match_scroll.set)
-  ttk.Button(matching,text='Open matching report',command=lambda:os.startfile(str(self.match_folder)) if self.match_folder else None).grid(row=5,column=0,sticky='w',pady=10)
+  self.match_table.bind('<<TreeviewSelect>>',lambda e:self.refresh_review_buttons());self.match_table.bind('<Double-1>',self.open_match_preview)
+  report_actions=tk.Frame(matching,bg=BG);report_actions.grid(row=5,column=0,columnspan=3,sticky='ew',pady=10)
+  self.load_report_button=ttk.Button(report_actions,text='Load report…',command=self.load_match_report);self.load_report_button.pack(side='left')
+  ttk.Button(report_actions,text='Open report folder',command=lambda:os.startfile(str(self.match_folder)) if self.match_folder else None).pack(side='left',padx=8)
   self.match_source.trace_add('write',self.invalidate_match);self.match_target.trace_add('write',self.invalidate_match)
   try:
    projects=sorted(Path(self.output.get()).glob('*/project.json'))
@@ -121,15 +134,85 @@ class App(tk.Tk):
    if targets:self.match_target.set(str(targets[-1]))
   except (OSError,ValueError):pass
   bottom=tk.Frame(self,bg=BG);bottom.grid(row=3,column=0,sticky='ew',padx=24,pady=(8,14));bottom.columnconfigure(0,weight=1);self.status=tk.StringVar(value='Ready. Create a project or choose an existing project.');self.count=tk.StringVar();tk.Label(bottom,textvariable=self.status,bg=BG,fg=TEXT,anchor='w',wraplength=1000).grid(row=0,column=0,columnspan=3,sticky='ew');self.progress=ttk.Progressbar(bottom,maximum=100);self.progress.grid(row=1,column=0,columnspan=3,sticky='ew',pady=7);tk.Label(bottom,textvariable=self.count,bg=BG,fg=MUTED,anchor='w').grid(row=2,column=0,sticky='w');self.open_button=ttk.Button(bottom,text='Open project',command=self.open_output,state='disabled');self.open_button.grid(row=2,column=1,padx=8);self.stop_button=ttk.Button(bottom,text='Cancel',command=self.stop,state='disabled');self.stop_button.grid(row=2,column=2)
-  self.controls=[self.sequence_button,self.match_button,self.tree_button,self.export_button,self.scan_button,self.prepare_button,self.restore_button]+self.fields;self.game.trace_add('write',self.invalidate);self.project.trace_add('write',self.invalidate);self.protocol('WM_DELETE_WINDOW',self.close);self.poll_after=self.after(100,self.poll)
+  self.controls=[self.sequence_button,self.match_button,self.overlap_slider,self.approve_button,self.unapprove_button,self.load_report_button,self.tree_button,self.export_button,self.scan_button,self.prepare_button,self.restore_button]+self.fields;self.game.trace_add('write',self.invalidate);self.project.trace_add('write',self.invalidate);self.protocol('WM_DELETE_WINDOW',self.close);self.poll_after=self.after(100,self.poll)
 
  def invalidate_match(self,*args):
-  self.match_folder=None;self.match_report=None;self.copy_button.state(['disabled'])
+  self.match_folder=None;self.match_report=None;self.match_rows={};self.copy_button.state(['disabled']);self.approve_button.state(['disabled']);self.unapprove_button.state(['disabled']);self.match_table.delete(*self.match_table.get_children())
  def refresh_copy_button(self):
   ready=bool(self.match_folder and self.match_report and self.match_report.get('matches'))
   self.copy_button.state(['!disabled'] if ready and not self.busy else ['disabled'])
+  self.refresh_review_buttons()
+ def selected_match_keys(self,group):
+  return [self.match_rows[i][1] for i in self.match_table.selection() if i in self.match_rows and self.match_rows[i][0]==group]
+ def refresh_review_buttons(self):
+  self.approve_button.state(['!disabled'] if not self.busy and self.selected_match_keys('review') else ['disabled'])
+  self.unapprove_button.state(['!disabled'] if not self.busy and self.selected_match_keys('matches') else ['disabled'])
+ def render_matches(self,selected=()):
+  self.match_table.delete(*self.match_table.get_children());self.match_rows={};selected=set(selected);selection=[]
+  for group,label in [('matches','Ready to copy'),('review','Review required'),('unmatched','Unmatched')]:
+   for i,r in enumerate(self.match_report[group]):
+    needed=any(copy_required(self.match_report,c) for c in r.get('copies',[]))
+    status=('Ready to copy' if needed else 'Identical pixels — no copy needed') if group=='matches' else label
+    if group=='matches' and r.get('approved'):status='Approved — '+('ready to copy' if needed else 'no copy needed')
+    if group=='matches' and r.get('recovery')=='transparent':status='Transparent frame — no copy needed'
+    if 'reason' in r:status+=' — '+r['reason']
+    if 'registered_overlap' in r:status+=f' — aligned shape overlap {r["registered_overlap"]:.1%}'
+    iid=f'{group}-{i}';record_key=match_review.key(r);self.match_rows[iid]=(group,record_key)
+    targets=', '.join(c['target'] for c in r.get('copies',[]))
+    self.match_table.insert('',tk.END,iid=iid,values=(f'{r["character"]} {r["source_frame"]}',targets or str(r.get('target_frame','')),status))
+    if record_key in selected:selection.append(iid)
+  self.match_table.selection_set(selection)
+  if selection:self.match_table.see(selection[0])
+  self.refresh_copy_button()
+ def load_match_report(self):
+  if self.busy:return
+  path=filedialog.askopenfilename(title='Load matching report',filetypes=[('Matching report','matches.json')],initialdir=str(self.match_folder or Path(self.match_target.get())/'Matches'))
+  if not path:return
+  try:
+   if Path(path).name!='matches.json':raise ValueError('Choose a matches.json report.')
+   folder=Path(path).parent;report,*_=match_review.load_report(folder)
+   self.match_source.set(report['source']);self.match_target.set(report['target']);self.overlap.set(report.get('min_overlap',.94)*100);self.match_folder=folder;self.match_report=report;self.render_matches()
+   self.status.set(f'Loaded report: {len(report["matches"])} ready frames, {len(report["review"])} for review. Saved approvals retained.')
+  except Exception as exc:messagebox.showerror('Cannot load report',str(exc))
+ def approve_records(self,selected=None,expected_folder=None):
+  if self.busy or not self.match_folder:return False
+  if expected_folder is not None and Path(self.match_folder).resolve()!=Path(expected_folder).resolve():
+   messagebox.showerror('Report changed','Reopen the preview for the current matching report.');return False
+  selected=selected or self.selected_match_keys('review')
+  if not selected:return False
+  try:
+   plan=match_review.approval_plan(self.match_folder,selected);replace=bool(plan['conflicts'] or plan['input_conflicts'])
+   if replace:
+    other={match_review.key(r):r for r in plan['conflicts']+plan['input_conflicts']}
+    labels='\n'.join(f'{r["character"]} {r["source_frame"]} → {r["target_frame"]}' for r in list(other.values())[:8])
+    if len(other)>8:labels+=f'\n… and {len(other)-8} more.'
+    text=f'Keep the selected source variant instead?\n\n{len(other)} conflicting ready or staged choice(s):\n{labels}\n\nOther ready variants will return to review. Nothing is copied now.'
+    if plan['overwrites']:text+='\n\nWhen you click Copy ready PNGs, unchanged copies of these older choices can be backed up and replaced. Files edited since copying stay protected.'
+    if not messagebox.askyesno('Choose source variant',text):return False
+   self.match_report=match_review.approve(self.match_folder,selected,replace,plan['report_sha256']);self.render_matches(selected)
+   self.status.set(f'Approved {len(selected)} pairing(s). Nothing copied yet. Click Copy ready PNGs to target Input.');return True
+  except Exception as exc:messagebox.showerror('Cannot approve frames',str(exc));return False
+ def return_records(self,selected=None,expected_folder=None):
+  if self.busy or not self.match_folder:return False
+  if expected_folder is not None and Path(self.match_folder).resolve()!=Path(expected_folder).resolve():return False
+  selected=selected or self.selected_match_keys('matches')
+  if not selected:return False
+  try:
+   self.match_report=match_review.return_to_review(self.match_folder,selected);self.render_matches(selected)
+   self.status.set(f'Returned {len(selected)} pairing(s) to review. Previously copied Input files were left unchanged.');return True
+  except Exception as exc:messagebox.showerror('Cannot return frames to review',str(exc));return False
+ def open_match_preview(self,event=None):
+  if self.busy or not self.match_folder:return
+  selection=self.match_table.selection()
+  if not selection or selection[0] not in self.match_rows:return
+  group,record_key=self.match_rows[selection[0]]
+  if group=='unmatched':return
+  try:
+   record,views=match_review.preview_pair(self.match_folder,record_key)
+   self.match_preview=MatchPreviewDialog(self,self.match_folder,record_key,record,views,group=='review')
+  except Exception as exc:messagebox.showerror('Cannot preview pairing',str(exc))
  def start_match(self):
-  source=self.match_source.get();target=self.match_target.get();self.invalidate_match();self.status.set('Matching exported projects');self.launch('match',lambda:match_projects(source,target,self.report,self.cancel_event))
+  source=self.match_source.get();target=self.match_target.get();minimum=round(self.overlap.get())/100;self.invalidate_match();self.status.set(f'Matching exported projects with {minimum:.0%} minimum shape overlap');self.launch('match',lambda:match_projects(source,target,self.report,self.cancel_event,min_overlap=minimum))
  def start_copy(self):
   if self.busy:return
   if not self.match_folder:
@@ -204,10 +287,13 @@ class App(tk.Tk):
    prepared=self.prepared;self.launch('apply',lambda:apply_import(prepared,self.report),False)
  def start_mod_export(self):
   if self.busy or not self.plan or not self.prepared:return
+  self.mod_dialog=ModDetailsDialog(self)
+ def export_mods(self,metadata):
+  if self.busy or not self.plan or not self.prepared:return False
   parent=filedialog.askdirectory(initialdir=str(Path(self.project.get()).parent),title='Save one mod ZIP per applicable character')
-  if not parent:return
+  if not parent:return False
   prepared=self.prepared;self.status.set('Building character mod ZIPs without modifying the game…')
-  self.launch('mods',lambda:export_mod_zips(prepared,parent,self.report,self.cancel_event))
+  self.launch('mods',lambda:export_mod_zips(prepared,parent,self.report,self.cancel_event,metadata=metadata));return True
  def start_restore(self):
   if self.busy:return
   initial=str(self.last_backup or (Path(self.project.get())/'Backups'));folder=filedialog.askdirectory(initialdir=initial if Path(initial).is_dir() else str(Path.home()),title='Choose a backup containing restore.json')
@@ -251,15 +337,13 @@ class App(tk.Tk):
     elif event=='export':
      self.last_output,m=payload;self.project.set(str(self.last_output));self.finish();self.open_button.state(['!disabled']);frames=sum(x['exported'] for x in m['characters'].values());unmapped=sum(x['unmapped'] for x in m['characters'].values());self.status.set(f'{m["status"]}: {frames:,} frames exported. Input has empty matching folders.');self.count.set(f'{unmapped:,} frames in unmapped folders; {len(m["errors"]):,} export errors.');self.progress['value']=100 if m['status']=='complete' else self.progress['value']
     elif event=='match':
-     self.match_folder,self.match_report=payload;self.finish();self.match_table.delete(*self.match_table.get_children())
-     ready_pngs=sum(not c['identical_pixels'] for r in self.match_report['matches'] for c in r['copies']);identical_pngs=sum(c['identical_pixels'] for r in self.match_report['matches'] for c in r['copies'])
-     for group,label in [('matches','Ready to copy'),('review','Review required'),('unmatched','Unmatched')]:
-      for r in self.match_report[group]:
-       targets=', '.join(c['target'] for c in r.get('copies',[]));self.match_table.insert('',tk.END,values=(f'{r["character"]} {r["source_frame"]}',targets or str(r.get('target_frame','')),('Identical pixels — no copy needed' if group=='matches' and all(c['identical_pixels'] for c in r['copies']) else label)+(' — '+r['reason'] if 'reason' in r else '')))
+     self.match_folder,self.match_report=payload;self.finish();self.render_matches()
+     ready_pngs=len({c['target'] for r in self.match_report['matches'] for c in r['copies'] if copy_required(self.match_report,c)});identical_pngs=sum(not copy_required(self.match_report,c) for r in self.match_report['matches'] for c in r['copies'])
      missing=len(self.match_report.get('missing_exports',[]))
      self.copy_button.state(['!disabled'] if self.match_report['matches'] else ['disabled']);self.status.set(f'{ready_pngs:,} PNGs ready to copy; {identical_pngs:,} identical PNGs skipped; {len(self.match_report["review"]):,} uncertain frames; {missing:,} frames skipped for missing Output PNGs. Nothing copied yet. Click Copy ready PNGs to target Input.');self.progress['value']=100
     elif event=='copy':
      target,result=payload;self.finish();self.project.set(str(target));self.tabs.select(1);self.status.set(f'Copied {len(result["copied"]):,} PNGs to target Input; {len(result["existing"]):,} existing edits preserved; {len(result.get("replaced_references",[])):,} unchanged references replaced; {result["unchanged"]:,} identical PNGs skipped. Prepare previews next.');self.progress['value']=100
+     if result.get('approved_replaced'):self.status.set(self.status.get()+f' {len(result["approved_replaced"])} reviewed choice(s) replaced with backups in {result["approval_backup"]}.')
     elif event=='mods':
      folder,records=payload;self.finish();self.apply_button.state(['!disabled']);self.status.set(f'Saved {len(records)} character mod ZIPs to {folder}. Import the ZIPs into Skullgirls Mod Manager.');self.progress['value']=100
     elif event=='sequence':
@@ -303,6 +387,87 @@ class App(tk.Tk):
  def close_when_idle(self):
   if self.busy:self.after(200,self.close_when_idle)
   else:self.destroy()
+
+class MatchPreviewDialog(tk.Toplevel):
+ def __init__(self,parent,folder,record_key,record,views,review):
+  super().__init__(parent);self.parent=parent;self.folder=folder;self.record_key=record_key;self.views={name:(source,target) for name,source,target in views};self.photos=[]
+  self.title(f'{NAMES.get(record["character"],record["character"])} · {record["source_frame"]} → {record["target_frame"]}')
+  self.geometry('960x620');self.minsize(780,460);self.configure(bg=BG);self.transient(parent)
+  self.columnconfigure(0,weight=1);self.columnconfigure(1,weight=1);self.rowconfigure(2,weight=1)
+  detail=record.get('reason','Ready pairing')
+  if 'registered_overlap' in record:detail+=f' · aligned shape overlap {record["registered_overlap"]:.1%}'
+  tk.Label(self,text=detail,bg=BG,fg=TEXT,wraplength=920,justify='left').grid(row=0,column=0,columnspan=2,sticky='ew',padx=14,pady=10)
+  self.view=tk.StringVar(value=views[0][0]);self.layer_box=ttk.Combobox(self,textvariable=self.view,values=list(self.views),state='readonly');self.layer_box.grid(row=1,column=0,columnspan=2,sticky='ew',padx=14,pady=(0,8));self.layer_box.bind('<<ComboboxSelected>>',self.select_view)
+  self.canvases=[]
+  for col,title in enumerate([f'Source · frame {record["source_frame"]}',f'Target · frame {record["target_frame"]}']):
+   frame=tk.Frame(self,bg=BG);frame.grid(row=2,column=col,sticky='nsew',padx=10);frame.columnconfigure(0,weight=1);frame.rowconfigure(1,weight=1)
+   tk.Label(frame,text=title,bg=BG,fg=ACCENT).grid(row=0,column=0,sticky='w',pady=6)
+   canvas=tk.Canvas(frame,bg=PANEL,highlightthickness=0,width=420,height=360);canvas.grid(row=1,column=0,sticky='nsew');canvas.bind('<Configure>',lambda e:self.redraw());self.canvases.append(canvas)
+  tk.Label(self,text='Both images use the same zoom. Approval covers all editable layers; copying is a separate step.',bg=BG,fg=MUTED,wraplength=920).grid(row=3,column=0,columnspan=2,sticky='w',padx=14,pady=8)
+  ttk.Button(self,text='Close',command=self.destroy).grid(row=4,column=0,sticky='w',padx=14,pady=10)
+  self.approve_button=ttk.Button(self,text='Approve pairing' if review else 'Return to review',style='Accent.TButton',command=self.submit_review if review else self.submit_return);self.approve_button.grid(row=4,column=1,sticky='e',padx=14,pady=10)
+  self.select_view()
+ def select_view(self,event=None):
+  self.images=[]
+  for path in self.views[self.view.get()]:
+   with Image.open(path) as image:self.images.append(image.convert('RGBA'))
+  self.redraw()
+ def redraw(self):
+  if not getattr(self,'images',None):return
+  width=max(100,min(c.winfo_width() for c in self.canvases));height=max(100,min(c.winfo_height() for c in self.canvases))
+  scale=min((width-16)/max(im.width for im in self.images),(height-16)/max(im.height for im in self.images),8)
+  self.photos=[]
+  for canvas,image in zip(self.canvases,self.images):
+   w=max(100,canvas.winfo_width());h=max(100,canvas.winfo_height());canvas.delete('all')
+   for y in range(0,h,20):
+    for x in range(0,w,20):canvas.create_rectangle(x,y,x+20,y+20,fill=PANEL if (x//20+y//20)%2 else HOVER,outline='')
+   resized=image.resize((max(1,round(image.width*scale)),max(1,round(image.height*scale))),Image.Resampling.NEAREST)
+   photo=ImageTk.PhotoImage(resized,master=canvas);self.photos.append(photo);canvas.create_image(w/2,h/2,image=photo)
+ def submit_review(self):
+  if self.parent.approve_records([self.record_key],self.folder):self.destroy()
+ def submit_return(self):
+  if self.parent.return_records([self.record_key],self.folder):self.destroy()
+
+
+class ModDetailsDialog(tk.Toplevel):
+ def __init__(self,app):
+  super().__init__(app);self.app=app;self.title('Mod details');self.geometry('680x480');self.minsize(580,430);self.configure(bg=BG);self.transient(app);self.grab_set();self.columnconfigure(1,weight=1);self.rowconfigure(4,weight=1)
+  self.project=str(Path(app.project.get()).resolve());self.characters=sorted({r['character'] for r in app.plan['patches']})
+  saved=getattr(app,'mod_drafts',{}).get(self.project,{})
+  self.drafts={name:mod_details(name,saved.get(name)) for name in self.characters};self.current=self.characters[0]
+  tk.Label(self,text='Edit the details included in each character’s mod.json.',bg=BG,fg=TEXT).grid(row=0,column=0,columnspan=2,sticky='w',padx=16,pady=14)
+  tk.Label(self,text='Character',bg=BG,fg=MUTED).grid(row=1,column=0,sticky='w',padx=16)
+  self.character=tk.StringVar(value=NAMES[self.current]);self.character_box=ttk.Combobox(self,textvariable=self.character,values=[NAMES[n] for n in self.characters],state='readonly');self.character_box.grid(row=1,column=1,sticky='ew',padx=16,pady=6);self.character_box.bind('<<ComboboxSelected>>',self.switch_character)
+  self.name=tk.StringVar();self.version=tk.StringVar()
+  for row,label,var in [(2,'Name',self.name),(3,'Version',self.version)]:
+   tk.Label(self,text=label,bg=BG,fg=MUTED).grid(row=row,column=0,sticky='w',padx=16)
+   entry=ttk.Entry(self,textvariable=var);entry.grid(row=row,column=1,sticky='ew',padx=16,pady=6)
+   if row==2:self.name_entry=entry
+  tk.Label(self,text='Description',bg=BG,fg=MUTED).grid(row=4,column=0,sticky='nw',padx=16,pady=6)
+  frame=tk.Frame(self,bg=BG);frame.grid(row=4,column=1,sticky='nsew',padx=16,pady=6);frame.columnconfigure(0,weight=1);frame.rowconfigure(0,weight=1)
+  self.description=tk.Text(frame,height=6,wrap='word',bg=PANEL,fg=TEXT,insertbackground=TEXT,relief='flat',padx=8,pady=8,undo=True);self.description.grid(row=0,column=0,sticky='nsew');scroll=ttk.Scrollbar(frame,command=self.description.yview);scroll.grid(row=0,column=1,sticky='ns');self.description.configure(yscrollcommand=scroll.set)
+  self.error=tk.StringVar();tk.Label(self,textvariable=self.error,bg=BG,fg=ACCENT,wraplength=630,justify='left').grid(row=5,column=0,columnspan=2,sticky='w',padx=16,pady=6)
+  actions=tk.Frame(self,bg=BG);actions.grid(row=6,column=0,columnspan=2,sticky='ew',padx=16,pady=14)
+  ttk.Button(actions,text='Cancel',command=self.destroy).pack(side='left');self.export_button=ttk.Button(actions,text='Choose folder and export…',style='Accent.TButton',command=self.submit);self.export_button.pack(side='right')
+  self.show_character();self.bind('<Escape>',lambda e:self.destroy());self.name_entry.focus_set()
+ def store_character(self):
+  self.drafts[self.current]=dict(name=self.name.get(),version=self.version.get(),desc=self.description.get('1.0','end-1c'))
+ def show_character(self):
+  values=self.drafts[self.current];self.name.set(values['name']);self.version.set(values['version']);self.description.delete('1.0',tk.END);self.description.insert('1.0',values['desc'])
+ def switch_character(self,event=None):
+  self.store_character();self.current=self.characters[self.character_box.current()];self.show_character();self.error.set('')
+ def submit(self):
+  self.store_character()
+  try:metadata={name:mod_details(name,values) for name,values in self.drafts.items()}
+  except ValueError as exc:self.error.set(str(exc));return
+  if not hasattr(self.app,'mod_drafts'):self.app.mod_drafts={}
+  self.app.mod_drafts[self.project]=metadata
+  self.grab_release()
+  try:started=self.app.export_mods(metadata)
+  finally:
+   if self.winfo_exists():self.grab_set()
+  if started:self.destroy()
+
 
 class SequenceDialog(tk.Toplevel):
  def __init__(self,app,project,files,groups):

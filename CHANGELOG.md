@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.17 — 2026-10-23
+
+- Add a 50–100% minimum shape-overlap slider to project matching, defaulting to 94%.
+- Apply the chosen minimum to sequence and recovered pairings; retain ambiguity, layer and shared-target review checks.
+- Save the threshold in matching reports and restore it when loading them. Slider changes take effect on the next match.
+
+## 0.2.16 — 2026-10-23
+
+- Edit each character mod’s name, version and multiline description in a window before exporting ZIPs.
+- Retain metadata drafts per project while Workshop is open; validate required fields before export.
+
+## 0.2.15 — 2026-10-22
+
+- Add Approve selected and Return to review controls, with persistent decisions and loading of existing matching reports.
+- Double-click pairings for a side-by-side preview with composite and editable-layer views.
+- Require an explicit source-variant choice for conflicting targets. Back up unchanged staged copies when switching variants, and preserve later user edits.
+- Keep approvals separate from copying, preparation and game changes; validate layers, hashes and report revisions before saving decisions.
+
+## 0.2.14 — 2026-10-22
+
+- Recover reordered and reused frames after sequence alignment using native-size, translation-tolerant alpha overlap.
+- Recognize faint effects using relative opacity instead of dropping frames below a fixed alpha cutoff.
+- Reuse identical old artwork across shared targets, deduplicate Input copies, and keep conflicting source variants in review.
+- Show aligned shape overlap for recovered pairings. Fully transparent matches need no copy.
+
+## 0.2.13 — 2026-10-22
+
+- Compare softly normalized outlines when matching exported projects across game versions, avoiding false mismatches from small emblem, outline and alpha-edge changes.
+- Keep frame order, aspect-ratio penalties, editable-layer checks and ambiguous-neighbor review. Compendium animation naming is unchanged.
+
 ## 0.2.12 — 2026-10-20
 
 - Update Filia and Valentine character-select idle previews from edited standing idle sprites in Apply and mod ZIP exports.

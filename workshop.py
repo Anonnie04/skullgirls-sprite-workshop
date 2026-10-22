@@ -620,8 +620,21 @@ def validate_prepared(prepared,check_running=False):
  return prepared,plan,source,project,manifest
 
 
-def export_mod_zips(prepared,parent,progress=lambda *a:None,cancel=None):
+def mod_details(name,values=None):
+ values={} if values is None else values
+ defaults=dict(name=f'{NAMES[name]} sprite replacements',version='1.0.0',desc='Prepared character sprite replacements. Requires the same game version used to prepare this mod.')
+ result={key:values.get(key,default) for key,default in defaults.items()}
+ for key,value in result.items():
+  if not isinstance(value,str):raise ValueError(f'{NAMES[name]}: {key} must be text.')
+  result[key]=value.strip()
+ for key in ('name','version'):
+  if not result[key]:raise ValueError(f'{NAMES[name]}: enter a mod {key}.')
+ return result
+
+
+def export_mod_zips(prepared,parent,progress=lambda *a:None,cancel=None,metadata=None):
  stopped(cancel);prepared,plan,source,project,_=validate_prepared(prepared)
+ details={name:mod_details(name,(metadata or {}).get(name)) for name in {r['character'] for r in plan['patches']}}
  parent=Path(parent).expanduser().resolve()
  if parent.is_relative_to(source.parent) or any(parent.is_relative_to(project/branch) for branch in ['Input','Output','Prepared','Backups']):raise ValueError('Save mod ZIPs outside the game installation and project working folders.')
  parent.mkdir(parents=True,exist_ok=True)
@@ -653,6 +666,7 @@ def export_mod_zips(prepared,parent,progress=lambda *a:None,cancel=None):
       content[start:start+len(payload)]=payload
      path=archive_name+'/'+internal;assets[path]=bytes(content);identity.update(path.encode());identity.update(content)
    info=dict(id=f'spriteworkshop.{name}.{identity.hexdigest()[:16]}',name=f'{NAMES[name]} sprite replacements',author='Sprite Workshop',desc='Prepared character sprite replacements. Requires the same game version used to prepare this mod.',version='1.0.0',url=None)
+   info.update(details[name])
    filename=name+'-sprites.zip'
    with zipfile.ZipFile(staging/filename,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as output:
     output.writestr('mod.json',json.dumps(info,indent=2))

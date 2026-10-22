@@ -343,9 +343,12 @@ def run(report):
   sparse_folder,sparse=match_projects(sparse_source,sparse_target)
   assert sparse['status']=='matched' and len(sparse['missing_exports'])==5
   paired=sparse['matches']+sparse['review']
-  assert {r['character'] for r in paired}=={'annie','filia'} and len(paired)==4
+  # Reused-image recovery may pair more than one available source frame to
+  # a surviving target, but never reference the target PNG that is missing.
+  assert {r['character'] for r in paired}=={'annie','filia'} and len(paired)==5
   assert {r['source_frame'] for r in paired if r['character']=='annie'}=={0,2}
   assert {r['target_frame'] for r in paired if r['character']=='filia'}=={0,1}
+  assert {r['source_frame'] for r in paired if r['character']=='filia'}=={0,1,2}
   _,sparse_sm=project_info(sparse_source);_,sparse_tm=project_info(sparse_target)
   for record in paired:
    for item in record['copies']:
@@ -376,7 +379,9 @@ def run(report):
     assert time.monotonic()<deadline,'UI worker did not finish'
   messages=[];old_error=ui.messagebox.showerror;ui.messagebox.showerror=lambda *args:messages.append(args)
   try:
-   app.match_button.invoke();await_ui();assert app.match_folder and 'disabled' not in app.copy_button.state()
+   app.overlap.set(99);assert app.overlap_label.get()=='99%'
+   app.match_button.invoke();assert 'disabled' in app.overlap_slider.state();await_ui();assert app.match_folder and 'disabled' not in app.copy_button.state()
+   assert app.match_report['min_overlap']==.99 and 'disabled' not in app.overlap_slider.state()
    assert not list((ui_target/'Input').rglob('*.png'));assert 'Nothing copied yet' in app.status.get()
    # A failed copy must leave the Copy button available to retry.
    saved=upng.read_bytes();upng.write_bytes(saved+b'changed')
@@ -387,6 +392,7 @@ def run(report):
    assert (app.match_folder/'copy-result.json').exists();assert 'Copied 1 PNGs' in app.status.get()
   finally:ui.messagebox.showerror=old_error;app.destroy()
   passed.append('real Match and Copy buttons stage PNGs; failed copies remain retryable; UI distinguishes matching from copying')
+  passed.append('shape overlap slider updates its percentage, supplies the worker threshold and stays locked during matching')
 
   from animation_sequence import animations,plan_sequence,stage_sequence
   layered_groups=[items for key,items in animations(project).items() if '[layer ' in key]
@@ -462,6 +468,39 @@ def run(report):
   assert json.loads((prepared/'plan.json').read_text())['status']=='prepared' and not (project/'Backups').exists()
   expect_error(lambda:export_mod_zips(prepared,game/'bad'),'outside')
   passed.append('character mod ZIP contains verified complete patched assets in manager layout; game and preparation unchanged')
+  # Exercise the actual metadata window through the existing ZIP worker.
+  app=App();app.withdraw();app.project.set(str(project));app.prepared=prepared;app.plan=plan
+  old_directory=ui.filedialog.askdirectory;ui.filedialog.askdirectory=lambda **kwargs:str(root/'Named mod ZIPs')
+  try:
+   app.start_mod_export();dialog=app.mod_dialog;dialog.withdraw()
+   dialog.name.set('');dialog.submit();assert 'enter a mod name' in dialog.error.get() and not app.busy
+   dialog.name.set('Annie — custom art');dialog.version.set('2.0-beta');dialog.description.delete('1.0','end');dialog.description.insert('1.0','First line\nSecond line: café')
+   dialog.export_button.invoke();await_ui();assert not dialog.winfo_exists()
+   named=next((root/'Named mod ZIPs').rglob('annie-sprites.zip'))
+   with zipfile.ZipFile(named) as archive:
+    custom=json.loads(archive.read('mod.json'))
+    assert custom['name']=='Annie — custom art' and custom['version']=='2.0-beta' and custom['desc']=='First line\nSecond line: café'
+    assert custom['id']==info['id'] and custom['author']==info['author']
+    with zipfile.ZipFile(mod_folder/mods[0]['file']) as baseline:
+     assert all(archive.read(n)==baseline.read(n) for n in archive.namelist() if n!='mod.json')
+   app.start_mod_export();dialog=app.mod_dialog;dialog.withdraw();assert dialog.name.get()==custom['name'];dialog.destroy()
+   assert {p.name:sha(p) for p in (game/'data01').glob('*.gfs')}==original
+  finally:ui.filedialog.askdirectory=old_directory;app.destroy()
+  passed.append('mod details window validates fields, retains drafts and exports Unicode multiline metadata with unchanged art and game files')
+  app=App();app.withdraw();app.project.set(str(project));app.prepared=prepared;app.plan={'patches':[{'character':'annie'},{'character':'filia'}]}
+  try:
+   app.start_mod_export();dialog=app.mod_dialog;dialog.withdraw();dialog.name.set('Annie draft');dialog.version.set('3');dialog.description.delete('1.0','end')
+   dialog.character_box.current(1);dialog.switch_character();assert dialog.name.get()=='Filia sprite replacements';dialog.name.set('Filia draft')
+   dialog.character_box.current(0);dialog.switch_character();assert dialog.name.get()=='Annie draft' and dialog.version.get()=='3' and dialog.description.get('1.0','end-1c')==''
+   captured=[];app.export_mods=lambda metadata:captured.append(metadata) or False
+   dialog.submit();assert dialog.winfo_exists() and captured[0]['filia']['name']=='Filia draft' and captured[0]['annie']['desc']==''
+   dialog.update_idletasks();assert dialog.winfo_reqheight()<=480;dialog.destroy();assert not app.busy
+   from workshop import mod_details
+   expect_error(lambda:mod_details('annie',{'version':'  '}),'enter a mod version')
+   expect_error(lambda:export_mod_zips(prepared,root/'Invalid mod ZIPs',metadata={'annie':{'name':''}}),'enter a mod name')
+   assert not (root/'Invalid mod ZIPs').exists()
+  finally:app.destroy()
+  passed.append('per-character metadata drafts stay separate; cancelling export preserves the dialog; invalid metadata creates no export folder')
   saved_input=(project/'Input'/route).read_bytes();(project/'Input'/route).write_bytes(saved_input+b'extra');expect_error(lambda:apply_import(prepared,check_running=False),'Input PNG changed');expect_error(lambda:export_mod_zips(prepared,root/'Mod ZIPs'),'Input PNG changed');(project/'Input'/route).write_bytes(saved_input);passed.append('stale Input refused')
   payload=prepared/plan['patches'][0]['payload'];saved=payload.read_bytes();payload.write_bytes(bytes([saved[0]^1])+saved[1:]);expect_error(lambda:apply_import(prepared,check_running=False),'payload was altered');expect_error(lambda:export_mod_zips(prepared,root/'Mod ZIPs'),'payload was altered');payload.write_bytes(saved);passed.append('tampered prepared payload refused')
   plan_file=prepared/'plan.json';saved_plan=plan_file.read_bytes();tampered=json.loads(saved_plan);tampered['patches'][0]['offset']+=1;write_json(plan_file,tampered);expect_error(lambda:apply_import(prepared,check_running=False),'art slot');plan_file.write_bytes(saved_plan);passed.append('tampered destination offset refused')
@@ -502,11 +541,205 @@ def run(report):
   relocation_regressions(root,passed)
   art_memory_regressions(root,passed)
   select_preview_regressions(root,passed)
+  outline_matching_regressions(root,passed)
+  approval_regressions(root,passed)
   result=dict(status='passed',native_cpu_available=codec.native_optimal is not None,checks=passed,project=str(project),game_fixture=str(game))
  except Exception as exc:
   import traceback
   result=dict(status='failed',checks=passed,error=str(exc),traceback=traceback.format_exc(),test_root=str(root));write_json(report,result);raise
  write_json(report,result);print(json.dumps(result,indent=2),flush=True);return result
+
+def approval_regressions(root,passed):
+ from unittest.mock import patch
+ import match_review as review
+ import workshop_app as ui
+ from project_match import copy_matches
+ area=root/'ReviewApproval';area.mkdir();game=fixture(area)
+ source,sm=export_project(game,area/'Projects',['annie'],limit=4);target,tm=export_project(game,area/'Projects',['annie'],limit=4)
+ routes={e['frame']:r for r,e in sm['exports'].items() if e['layer']==0}
+ for frame,color in [(0,[200,20,20]),(1,[20,20,200])]:
+  path=source/'Output'/routes[frame];pixels=np.array(Image.open(path).convert('RGBA'));pixels[:,:,:3]=color;Image.fromarray(pixels).save(path)
+ def record(old,new):
+  result=dict(character='annie',source_frame=old,target_frame=new,distance=2.,reason='Review this pose',copies=[])
+  for route,e in sm['exports'].items():
+   if e['frame']!=old or e['layer'] is None:continue
+   tr=next(r for r,v in tm['exports'].items() if v['frame']==new and v['layer']==e['layer'])
+   with Image.open(source/'Output'/route) as im:a=pixel_hash(im)
+   with Image.open(target/'Output'/tr) as im:b=pixel_hash(im)
+   result['copies'].append(dict(source=route,target=tr,source_sha256=sha(source/'Output'/route),target_sha256=sha(target/'Output'/tr),identical_pixels=a==b))
+  return result
+ def report(ready,uncertain):
+  folder=unique(target/'Matches','Review fixture');data=dict(source=str(source),target=str(target),source_manifest_sha256=sha(source/'project.json'),target_manifest_sha256=sha(target/'project.json'),matches=ready,review=uncertain,unmatched=[],missing_exports=[],status='matched');write_json(folder/'matches.json',data);return folder
+ r0=record(0,0);r1=record(1,1);r10=record(1,0);r3=record(3,3)
+ original={str(p):sha(p) for root in [source,target] for p in (root/'Output').rglob('*.png')}
+ folder=report([], [r0,r1]);keys=[review.key(r0),review.key(r1)]
+ planned=review.approval_plan(folder,keys);assert not planned['conflicts']
+ approved=review.approve(folder,keys,expected_sha256=planned['report_sha256'])
+ assert len(approved['matches'])==2 and not approved['review'] and all(r['approved'] for r in approved['matches'])
+ assert not list((target/'Input').rglob('*.png'))
+ loaded,*_=review.load_report(folder);assert loaded['review_history'][-1]['action']=='approve'
+ review.return_to_review(folder,keys);assert not review.load_report(folder)[0]['matches']
+ review.approve(folder,keys);_,copied=copy_matches(folder);assert len(copied['copied'])==2
+ passed.append('batch review approvals persist, return to review, and stage only after Copy ready; Output remains untouched')
+ conflict=report([], [record(0,0),record(1,0)]);unchanged=(conflict/'matches.json').read_bytes()
+ expect_error(lambda:review.approve(conflict,[review.key(r0),review.key(r10)]),'one variant per target');assert (conflict/'matches.json').read_bytes()==unchanged
+ conflict=report([record(0,0)],[record(1,0)]);unchanged=(conflict/'matches.json').read_bytes()
+ expect_error(lambda:review.approve(conflict,[review.key(r10)]),'conflicts');assert (conflict/'matches.json').read_bytes()==unchanged
+ plan=review.approval_plan(conflict,[review.key(r10)]);assert plan['conflicts'] and plan['overwrites']
+ chosen=review.approve(conflict,[review.key(r10)],True,plan['report_sha256'])
+ assert chosen['matches'][0]['source_frame']==1 and chosen['review'][0]['source_frame']==0
+ target_route=r10['copies'][0]['target'];old_bytes=(target/'Input'/target_route).read_bytes()
+ _,switched=copy_matches(conflict);assert len(switched['approved_replaced'])==1
+ assert (Path(switched['approval_backup'])/target_route).read_bytes()==old_bytes
+ assert (target/'Input'/target_route).read_bytes()==(source/'Output'/r10['copies'][0]['source']).read_bytes()
+ review.return_to_review(conflict,[review.key(r10)])
+ plan=review.approval_plan(conflict,[review.key(r0)]);assert plan['input_conflicts'] and not plan['conflicts']
+ review.approve(conflict,[review.key(r0)],True,plan['report_sha256'])
+ edited=target/'Input'/target_route;edited.write_bytes(b'preserve my later edit');_,protected=copy_matches(conflict)
+ assert protected['existing']==[target_route] and edited.read_bytes()==b'preserve my later edit'
+ passed.append('shared-target choices require explicit replacement, demote other ready variants, back up staged copies and preserve later Input edits')
+ invalid=record(3,3);invalid['copies']=invalid['copies'][:1];bad=report([], [invalid]);saved=(bad/'matches.json').read_bytes()
+ expect_error(lambda:review.approve(bad,[review.key(invalid)]),'incomplete');assert (bad/'matches.json').read_bytes()==saved
+ stale=report([], [record(0,0)]);saved=(stale/'matches.json').read_bytes();source_png=source/'Output'/r0['copies'][0]['source'];saved_png=source_png.read_bytes();source_png.write_bytes(saved_png+b'changed')
+ expect_error(lambda:review.approve(stale,[review.key(r0)]),'PNG changed');source_png.write_bytes(saved_png)
+ expect_error(lambda:review.approve(stale,[review.key(r0)],expected_sha256='0'*64),'report changed')
+ assert (stale/'matches.json').read_bytes()==saved
+ original_replace=Path.replace
+ def fail_report(path,destination):
+  if Path(destination)==stale/'matches.json':raise OSError('injected report write failure')
+  return original_replace(path,destination)
+ with patch.object(Path,'replace',fail_report):expect_error(lambda:review.approve(stale,[review.key(r0)]),'injected report')
+ assert (stale/'matches.json').read_bytes()==saved
+ passed.append('approval rejects incomplete layers, stale PNGs and changed report revisions; interrupted saves preserve the previous report')
+ # Exercise the real UI controls, saved-report loading and layer previews.
+ ui_folder=report([], [record(0,0),record(1,1)]);layer_folder=report([], [record(3,3)]);clash_folder=report([record(0,0)],[record(1,0)])
+ settings=json.loads((ui_folder/'matches.json').read_text());settings['min_overlap']=.87;write_json(ui_folder/'matches.json',settings)
+ before_input={str(p):sha(p) for p in (target/'Input').rglob('*.png')};errors=[]
+ app=ui.App();app.geometry('930x900');app.tabs.select(2)
+ try:
+  with patch.object(ui.messagebox,'showerror',side_effect=lambda *a:errors.append(a)):
+   with patch.object(ui.filedialog,'askopenfilename',return_value=str(ui_folder/'matches.json')):app.load_report_button.invoke()
+   app.update();assert app.match_folder==ui_folder and app.overlap_label.get()=='87%'
+   app.overlap.set(95);assert app.match_folder==ui_folder and len(app.match_report['review'])==2
+   app.match_table.selection_set('review-0');app.refresh_review_buttons();assert 'disabled' not in app.approve_button.state()
+   app.open_match_preview();app.update();dialog=app.match_preview;assert len(dialog.photos)==2
+   dialog.approve_button.invoke();app.update();assert len(app.match_report['matches'])==1 and 'Nothing copied yet' in app.status.get()
+   app.match_table.selection_set('review-0');app.refresh_review_buttons();app.approve_button.invoke();assert len(app.match_report['matches'])==2
+   app.match_table.selection_set(['matches-0','matches-1']);app.refresh_review_buttons();app.unapprove_button.invoke();assert not app.match_report['matches']
+   app.match_table.selection_set(['review-0','review-1']);app.refresh_review_buttons();app.approve_button.invoke();assert len(app.match_report['matches'])==2
+   with patch.object(ui.filedialog,'askopenfilename',return_value=str(ui_folder/'matches.json')):app.load_report_button.invoke()
+   assert all(r['approved'] for r in app.match_report['matches'])
+   with patch.object(ui.filedialog,'askopenfilename',return_value=str(layer_folder/'matches.json')):app.load_report_button.invoke()
+   assert app.overlap_label.get()=='94%'
+   app.match_table.selection_set('review-0');app.open_match_preview();dialog=app.match_preview;assert len(dialog.layer_box['values'])==3
+   dialog.view.set('Layer 1');dialog.select_view();assert len(dialog.photos)==2;dialog.destroy()
+   with patch.object(ui.filedialog,'askopenfilename',return_value=str(clash_folder/'matches.json')):app.load_report_button.invoke()
+   app.match_table.selection_set('review-0');app.refresh_review_buttons();saved=(clash_folder/'matches.json').read_bytes()
+   with patch.object(ui.messagebox,'askyesno',return_value=False):app.approve_button.invoke()
+   assert (clash_folder/'matches.json').read_bytes()==saved
+   with patch.object(ui.messagebox,'askyesno',return_value=True):app.approve_button.invoke()
+   assert app.match_report['matches'][0]['source_frame']==1
+   app.update();assert app.winfo_reqheight()<=900
+   assert app.unapprove_button.winfo_x()+app.unapprove_button.winfo_width()<=app.copy_button.winfo_x()
+   assert not errors,errors
+   assert {str(p):sha(p) for p in (target/'Input').rglob('*.png')}==before_input
+   app.match_target.set('changed project');assert 'disabled' in app.approve_button.state() and not app.match_rows
+ finally:app.destroy()
+ assert all(sha(Path(p))==digest for p,digest in original.items())
+ passed.append('actual preview, approve, return, reload and conflict-choice controls persist decisions, fit the window and never copy Input implicitly')
+
+
+def outline_matching_regressions(root,passed):
+ from PIL import ImageDraw
+ from layout import descriptor
+ from project_match import project_descriptor,match_projects,copy_matches
+ area=root/'OutlineMatching';area.mkdir();game=fixture(area)
+ pose=Image.new('RGBA',(32,32));d=ImageDraw.Draw(pose)
+ d.polygon([(15,1),(22,7),(26,14),(20,18),(27,29),(17,30),(14,22),(10,30),(3,29),(8,18),(4,13),(10,7)],fill='white')
+ revised=pose.copy();d=ImageDraw.Draw(revised)
+ for x,y in [(5,13),(24,14)]:d.rectangle((x,y,x+1,y+1),fill=(0,0,0,0))
+ # Two small edge revisions previously cost more than dropping the frame.
+ assert np.linalg.norm(descriptor(pose)-descriptor(revised))>2.5
+ assert np.linalg.norm(project_descriptor(pose)-project_descriptor(revised))<1.5
+ assert descriptor(pose)[-1]==project_descriptor(pose)[-1]
+ blank=Image.new('RGBA',(32,32));assert project_descriptor(blank) is None
+ wide=blank.copy();ImageDraw.Draw(wide).rectangle((2,10,29,20),fill='white')
+ tall=blank.copy();ImageDraw.Draw(tall).rectangle((13,1,18,30),fill='white')
+ extra=blank.copy();ImageDraw.Draw(extra).rectangle((1,15,30,18),fill='white')
+ def project(images):
+  p,m=export_project(game,area/'Projects',['annie'],limit=1);m['exports']={}
+  for frame,image in images:
+   route=f'annie/annie/data/unmapped/internal_frames/frames/frame_{frame:04d}_annie_1p.png'
+   destination=safe_path(p/'Output',route);destination.parent.mkdir(parents=True,exist_ok=True);image.save(destination)
+   m['exports'][route]=dict(character='annie',frame=frame,layer=0,art_bank=5,size=list(image.size),pixel_sha256=pixel_hash(image),match_distance=None)
+  write_json(p/'project.json',m);return p,m
+ source,sm=project([(0,blank),(10,wide),(14,pose),(20,tall)])
+ target,tm=project([(0,blank),(10,wide),(14,revised),(17,extra),(21,tall)])
+ before={str(p):sha(p) for root in [source,target] for p in (root/'Output').rglob('*.png')}
+ folder,result=match_projects(source,target)
+ assert [(r['source_frame'],r['target_frame']) for r in result['matches']]==[(0,0),(10,10),(14,14),(20,21)],result
+ assert not result['review'] and not result['unmatched'] and all(c['identical_pixels'] for r in result['matches'] if r['source_frame']==0 for c in r['copies'])
+ assert result['matching_method']=='registered-pose-v2'
+ assert all(sha(Path(p))==digest for p,digest in before.items())
+ assert not list((source/'Input').rglob('*.png')) and not list((target/'Input').rglob('*.png'))
+ passed.append('cross-version edge revisions match frame 14 and preserve sequence insertions, aspect ratio, transparent no-copy matches and untouched PNGs')
+ _,strict=match_projects(source,target,min_overlap=1.)
+ assert strict['min_overlap']==1. and any(r['source_frame']==14 and 'below the selected 100%' in r['reason'] for r in strict['review'])
+ assert {r['source_frame'] for r in strict['matches']}=={0,10,20}
+ _,tolerant=match_projects(source,target,min_overlap=.5)
+ assert len(tolerant['matches'])==4 and not tolerant['review']
+ for value in [.49,1.01,float('nan')]:expect_error(lambda:match_projects(source,target,min_overlap=value),'between 50% and 100%')
+ passed.append('selected overlap minimum gates sequence pairs as well as recovered poses; exact and transparent shapes pass 100%, invalid thresholds fail')
+ # Softening edges must not force unrelated silhouettes or ambiguous duplicates.
+ wrong,_=project([(14,wide)]);_,mismatch=match_projects(source,wrong)
+ assert all(r['source_frame']!=14 for r in mismatch['matches'])
+ tinted=pose.copy();tinted.paste((200,20,20,255),(0,0,32,32),pose.getchannel('A'))
+ duplicate_source,_=project([(50,pose)]);duplicate_target,_=project([(51,pose),(52,tinted)])
+ _,ambiguous=match_projects(duplicate_source,duplicate_target)
+ assert not ambiguous['matches'] and any('neighboring' in r['reason'] for r in ambiguous['review'])
+ passed.append('soft project matching still rejects unrelated aspect ratios and reviews ambiguous neighboring poses')
+ route=next(r for r,e in tm['exports'].items() if e['frame']==14)
+ overlay=route.replace('.png','_layer1.png');shutil.copy2(target/'Output'/route,target/'Output'/overlay)
+ tm['exports'][overlay]={**tm['exports'][route],'layer':1};write_json(target/'project.json',tm)
+ _,layered=match_projects(source,target)
+ assert any(r['source_frame']==14 and r['reason']=='Editable layers differ between versions' for r in layered['review'])
+ passed.append('cross-version outline tolerance preserves editable-layer mismatch review')
+ # An emblem extending the bounding box must not rescale the whole pose.
+ extended=Image.new('RGBA',(64,32));extended.paste(pose,(0,0));extended.putpixel((50,15),(255,255,255,255))
+ assert np.linalg.norm(project_descriptor(pose)-project_descriptor(extended))>2.5
+ native_source,_=project([(383,pose)]);native_target,_=project([(388,extended)])
+ _,native=match_projects(native_source,native_target)
+ assert not native['unmatched'] and len(native['matches'])==1 and native['matches'][0]['registered_overlap']>.98,native
+ _,strict_native=match_projects(native_source,native_target,min_overlap=1.)
+ assert not strict_native['matches'] and len(strict_native['review'])==1
+ passed.append('native-size registration recovers a pose whose small protrusion changes the normalized bounding box')
+ # A reordered pose and repeated identical art can share one target safely.
+ red=tall.copy();red.paste((200,20,20,255),(0,0,32,32),tall.getchannel('A'))
+ reordered_source,_=project([(10,wide),(14,pose),(20,red),(21,red)])
+ reordered_target,_=project([(10,wide),(11,tall),(14,pose)])
+ rf,reordered=match_projects(reordered_source,reordered_target)
+ assert {r['source_frame']:r['target_frame'] for r in reordered['matches']}=={10:10,14:14,20:11,21:11},reordered
+ assert not reordered['unmatched'] and not reordered['review']
+ _,copied=copy_matches(rf);assert len(copied['copied'])==1 and not copied['existing'],copied
+ passed.append('reordered and repeated identical source artwork recovers many-to-one matches and stages each destination only once')
+ # Same silhouette does not justify discarding a different source variant.
+ blue=tall.copy();blue.paste((20,20,200,255),(0,0,32,32),tall.getchannel('A'))
+ variant_source,_=project([(20,red),(21,blue)]);variant_target,_=project([(30,tall)])
+ vf,variants=match_projects(variant_source,variant_target)
+ assert len(variants['matches'])==1 and len(variants['review'])==1 and 'shares this target' in variants['review'][0]['reason'],variants
+ variants['matches'].extend(variants['review']);variants['review']=[];write_json(vf/'matches.json',variants)
+ expect_error(lambda:copy_matches(vf),'same target')
+ assert not list((variant_target/'Input').rglob('*.png'))
+ passed.append('different source variants sharing a target remain in review; conflicting copy plans fail before any Input writes')
+ faint=pose.copy();faint.putalpha(pose.getchannel('A').point([0]+[32]*255))
+ brighter=pose.copy();brighter.putalpha(pose.getchannel('A').point([0]+[64]*255))
+ assert project_descriptor(faint) is None and project_descriptor(brighter) is None
+ faint_source,_=project([(40,faint)]);faint_target,_=project([(50,brighter)])
+ _,faded=match_projects(faint_source,faint_target)
+ assert not faded['unmatched'] and not faded['review'] and faded['matches'][0]['registered_overlap']>.99
+ assert not faded['matches'][0]['copies'][0]['identical_pixels']
+ passed.append('relative opacity recovers faint effects below the old alpha cutoff without treating visible artwork as blank')
+
 
 def select_preview_regressions(root,passed):
  from select_preview import pack,unpack,read_preview,build_preview,EMPTY
@@ -765,7 +998,7 @@ def mod_zip_regressions(root,passed):
   assert app.mod_button.winfo_x()+app.mod_button.winfo_width()<=app.apply_button.winfo_x()
   assert app.mod_button.winfo_x()>=app.prepare_button.winfo_x()+app.prepare_button.winfo_width()
   with patch.object(ui.filedialog,'askdirectory',return_value=str(root/'UIMods')),patch.object(ui.messagebox,'showerror',side_effect=lambda *a:errors.append(a)):
-   app.mod_button.invoke();deadline=time.monotonic()+20
+   app.mod_button.invoke();app.mod_dialog.export_button.invoke();deadline=time.monotonic()+20
    while app.busy:
     app.update();time.sleep(.01);assert time.monotonic()<deadline
   assert not errors and 'Saved 2 character mod ZIPs' in app.status.get(),errors

@@ -11,6 +11,8 @@ Use Windows x64 and Python 3.12. Install `requirements-dev.txt` and run `python 
 | `layout.py` | Digital Art Compendium naming and silhouette descriptors |
 | `animation_sequence.py` | Numbered PNG mapping, staging and Input backups |
 | `project_match.py` | Cross-version sequence alignment and guarded Input copies |
+| `pose_recovery.py` | Reused/reordered artwork recovery and opacity-aware image registration |
+| `match_review.py` | Validated approval decisions, shared-target choices and preview routes |
 | `workshop.py` | Projects, previews, fitting, verified apply and restore |
 | `compression.py` | Exact-length RLE and constrained value planning |
 | `compression_fast.py` | Optional Numba acceleration |
